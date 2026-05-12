@@ -166,16 +166,10 @@ const defaultValues: DefaultValues = {
       removeComboCard: {
         enabled: false,
       },
-      removeRank: {
-        enabled: false,
-      },
       removeHeaderStuff: {
         enabled: false,
       },
       removeFlipView: {
-        enabled: false,
-      },
-      removeRecommendRoom: {
         enabled: false,
       },
       removeLiveMosaic: {
