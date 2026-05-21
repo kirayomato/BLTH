@@ -35,6 +35,7 @@ interface ModuleConfig {
         }
         isWhiteList: boolean
         roomidList: number[]
+        roomidList2: number[]
       }
     }
     OtherTasks: {

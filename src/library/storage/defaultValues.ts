@@ -67,6 +67,7 @@ const defaultValues: DefaultValues = {
           },
           isWhiteList: false,
           roomidList: [],
+          roomidList2: []
         },
       },
       OtherTasks: {
