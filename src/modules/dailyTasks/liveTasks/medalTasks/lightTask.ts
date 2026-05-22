@@ -166,15 +166,18 @@ class LightTask extends MedalModule {
 
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
-      // 当前批次执行12轮
-      for (let j = 0; j < 12; j++) {
-        for (let i = 0; i < batch.length; i++) {
+      let n = batch.length;
+      for (let j = 0; j < 10; j++) {
+        for (let i = 0; i < n; i++) {
           const medal = batch[i];
           if (medal.medal.is_lighted) {
             const [prog, total] = await LightTask.getMissionProgress(medal.medal.target_id, "发弹幕")
             this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
-            if (total > 0 && prog == total)
+            if (total > 0 && prog == total) {
+              [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
+              n--;
               continue
+            }
           }
           const success = await this.sendDanmu(
             medal,
@@ -182,14 +185,14 @@ class LightTask extends MedalModule {
           );
 
           if (!success) {
-            await sleep(Math.max(150 * 1000 / medals.length, _.random(7000, 10000)));
+            await sleep(Math.max(150 * 1000 / batch.length, _.random(10e3, 15e3)));
             await this.sendEmoji(
               medal,
               this.config.emojiList[danmuIndex++ % this.config.emojiList.length]
             );
           }
 
-          await sleep(Math.max(150 * 1000 / medals.length, _.random(7000, 10000)));
+          await sleep(Math.max(150 * 1000 / batch.length, _.random(10e3, 15e3)));
         }
       }
     }
