@@ -32,7 +32,6 @@ class RoomHeart {
     this.parentID = parentID
     this.ruid = ruid
     this.watchedSeconds = watchedSeconds
-
     this.config = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch
   }
 
@@ -53,7 +52,7 @@ class RoomHeart {
   /** 主播的 UID */
   private readonly ruid: number
   private seq = 0
-
+  private progress = -1
   /** 计算签名和发送请求时均需要 JSON.stringify */
   private get id(): number[] {
     return [this.parentID, this.areaID, this.seq, this.roomID]
@@ -108,12 +107,12 @@ class RoomHeart {
       )
       if (response.code === 0) {
         this.seq += 1
-        ;({
-          heartbeat_interval: this.heartBeatInterval,
-          secret_key: this.secretKey,
-          secret_rule: this.secretRule,
-          timestamp: this.timestamp,
-        } = response.data)
+          ; ({
+            heartbeat_interval: this.heartBeatInterval,
+            secret_key: this.secretKey,
+            secret_rule: this.secretRule,
+            timestamp: this.timestamp,
+          } = response.data)
         await sleep(this.heartBeatInterval * 1000)
         return this.X()
       } else {
@@ -166,11 +165,21 @@ class RoomHeart {
       if (response.code === 0) {
         this.seq += 1
         this.updateProgress()
-        if (this.watchedSeconds >= this.config.time * 60) {
-          // 达到设置的观看时间，结束
-          return
+        const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看直播满15分钟")
+        if (total != 0) {
+          if (prog != this.progress || this.progress == -1) {
+            this.progress = prog;
+            this.logger.log(`${this.roomID} 观看直播进度: ${prog}/${total}`)
+          }
+          if (prog == total) {
+            this.logger.log(`${this.roomID} 观看直播进度已满，观看结束`)
+            return;
+          }
         }
-        ;({
+        else if (this.watchedSeconds >= this.config.time * 60) {
+          return;
+        }
+        ; ({
           heartbeat_interval: this.heartBeatInterval,
           secret_key: this.secretKey,
           secret_rule: this.secretRule,
@@ -254,25 +263,36 @@ class WatchTask extends MedalModule {
   }
 
   private playerStore = usePlayerStore()
-
+  sort_live_medals = (a: LiveData.FansMedalPanel.List, b: LiveData.FansMedalPanel.List) => {
+    const roomid = this.medalTasksConfig.roomidList2
+    if (roomid.includes(a.room_info.room_id) && roomid.includes(b.room_info.room_id))
+      return roomid.indexOf(a.room_info.room_id) - roomid.indexOf(b.room_info.room_id);
+    else if (roomid.includes(a.room_info.room_id))
+      return -1;
+    else if (roomid.includes(b.room_info.room_id))
+      return 1;
+    if (a.medal.level === b.medal.level)
+      return b.medal.intimacy - a.medal.intimacy;
+    return b.medal.level - a.medal.level;
+  };
   /**
    * 获取粉丝勋章
    * @returns 根据直播状态划分、经过排序和过滤的粉丝勋章
    */
   private getMedals(): LiveData.FansMedalPanel.List[] {
-    const fansMedals = useBiliStore().filteredFansMedals
-
+    const fansMedals = useBiliStore().filteredFansMedals;
     const result = fansMedals.filter(
       (medal) =>
-        this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal) &&
-        this.PUBLIC_MEDAL_FILTERS.levelLt120(medal),
-    )
-
-    if (this.medalTasksConfig.isWhiteList) {
-      this.sortMedals(result)
-    }
-
-    return result
+        medal.medal.is_lighted
+        && (
+          this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal)
+          && (this.medalTasksConfig.roomidList2.includes(medal.room_info.room_id)
+            || medal.medal.level < 20)
+        )
+    );
+    result.sort(this.sort_live_medals);
+    this.logger.log(`观看直播列表(${result.length}): ${result.map(medal => medal.anchor_info.nick_name)} `)
+    return result;
   }
 
   /**
