@@ -134,10 +134,21 @@ class LightTask extends MedalModule {
    * @private
    */
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
-    this.logger.log(`点赞勋章列表(${medals.length}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
-    for (let j = 0; j < 10; j++) {
-      for (let i = 0; i < medals.length; i++) {
+    let n = medals.length;
+    const batch = medals;
+    this.logger.log(`点赞勋章列表(${n}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
+    for (let j = 0; j < 12; j++) {
+      for (let i = n - 1; i >= 0; i--) {
         const medal = medals[i];
+        if (medal.medal.is_lighted) {
+          const [prog, total] = await LightTask.getMissionProgress(medal.medal.target_id, "点赞30次")
+          this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
+          if (total > 0 && prog == total) {
+            [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
+            n--;
+            continue
+          }
+        }
         await this.like(medal, _.random(30, 35));
         if (i < medals.length - 1) {
           await sleep(_.random(3e4, 35e3));
@@ -167,8 +178,8 @@ class LightTask extends MedalModule {
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
       let n = batch.length;
-      for (let j = 0; j < 10; j++) {
-        for (let i = 0; i < n; i++) {
+      for (let j = 0; j < 12; j++) {
+        for (let i = n - 1; i >= 0; i--) {
           const medal = batch[i];
           if (medal.medal.is_lighted) {
             const [prog, total] = await LightTask.getMissionProgress(medal.medal.target_id, "发弹幕")
@@ -210,7 +221,7 @@ class LightTask extends MedalModule {
     this.status = 'running'
     const fansMedals = this.getMedals()
 
-    await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off), this.sendDanmuTask(fansMedals.on)])
+    await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off)])
 
     this.config._lastCompleteTime = tsm()
     this.status = 'done'
