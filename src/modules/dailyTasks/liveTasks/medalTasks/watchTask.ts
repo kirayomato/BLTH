@@ -340,89 +340,74 @@ class WatchTask extends MedalModule {
   public async run(): Promise<void> {
     this.logger.log('观看直播模块开始运行')
 
-    await this.playerStore.waitForLiveStatus(0, {
-      onNeedWait: () => {
-        this.logger.log('当前直播间正在直播，直播结束后再执行观看直播任务')
-      },
-    })
+    if (!(await this.waitForFansMedals())) {
+      this.logger.error('粉丝勋章数据不存在，不执行观看直播任务')
+      this.status = 'error'
+      return
+    }
 
-    if (!isTimestampToday(this.config._lastCompleteTime)) {
-      if (!(await this.waitForFansMedals())) {
-        this.logger.error('粉丝勋章数据不存在，不执行观看直播任务')
-        this.status = 'error'
-        return
-      }
+    this.status = 'running'
 
-      this.status = 'running'
+    if (!isTimestampToday(this.config._lastWatchTime, 0, 0)) {
+      // 如果上次观看（不是完成任务）的时间戳不在今天，将今天已观看的秒数置为0
+      this.config._watchingProgress = {}
+    } else {
+      // 因为连续看 5 分钟（300秒）才能加亲密度，所以上一次观看时最后不足 5 分钟的时间是无效的
+      _.forOwn(this.config._watchingProgress, (value, key, object) => {
+        object[key] -= value % 300
+      })
+    }
 
-      if (!isTimestampToday(this.config._lastWatchTime, 0, 0)) {
-        // 如果上次观看（不是完成任务）的时间戳不在今天，将今天已观看的秒数置为0
-        this.config._watchingProgress = {}
-      } else {
-        // 因为连续看 5 分钟（300秒）才能加亲密度，所以上一次观看时最后不足 5 分钟的时间是无效的
-        _.forOwn(this.config._watchingProgress, (value, key, object) => {
-          object[key] -= value % 300
-        })
-      }
+    this.config._lastWatchTime = tsm()
+    const fansMedals = this.getMedals()
 
-      this.config._lastWatchTime = tsm()
-      const fansMedals = this.getMedals()
+    if (fansMedals.length > 0) {
+      let i: number
 
-      if (fansMedals.length > 0) {
-        let i: number
-
-        for (i = 0; i < fansMedals.length; i++) {
-          if (isNowIn(23, 55, 0, 5)) {
-            this.logger.log('即将或刚刚发生跨天，提早结束本轮观看直播任务')
-            break
-          }
-
-          const medal = fansMedals[i]
-          const roomid = medal.room_info.room_id
-          const uid = medal.medal.target_id
-          const [area_id, parent_area_id] = await this.getAreaInfo(medal.room_info.url, roomid)
-
-          if (area_id > 0 && parent_area_id > 0) {
-            // area_id 和 parent_area_id 都大于 0，说明直播间设置了分区，心跳有效
-            if (
-              !this.config._watchingProgress[roomid] ||
-              this.config._watchingProgress[roomid] < this.config.time * 60
-            ) {
-              // 今日观看时间未达到设置值，开始心跳
-              this.logger.log(
-                `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${medal.anchor_info.nick_name}】，UID：${uid}）的观看直播任务`,
-              )
-
-              await new RoomHeart(
-                roomid,
-                area_id,
-                parent_area_id,
-                uid,
-                this.config._watchingProgress[roomid] ?? 0,
-              ).start()
-            }
-          }
+      for (i = 0; i < fansMedals.length; i++) {
+        if (isNowIn(23, 55, 0, 5)) {
+          this.logger.log('即将或刚刚发生跨天，提早结束本轮观看直播任务')
+          break
         }
 
-        if (i === fansMedals.length) {
-          // 没有提早跳出循环，说明所有直播间的观看任务均已完成
-          this.config._lastCompleteTime = tsm()
-          this.logger.log('观看直播任务已完成')
-          this.status = 'done'
-        } else {
-          this.status = ''
+        const medal = fansMedals[i]
+        const roomid = medal.room_info.room_id
+        const uid = medal.medal.target_id
+        const [area_id, parent_area_id] = await this.getAreaInfo(medal.room_info.url, roomid)
+
+        if (area_id > 0 && parent_area_id > 0) {
+          // area_id 和 parent_area_id 都大于 0，说明直播间设置了分区，心跳有效
+          if (
+            !this.config._watchingProgress[roomid] ||
+            this.config._watchingProgress[roomid] < this.config.time * 60
+          ) {
+            // 今日观看时间未达到设置值，开始心跳
+            this.logger.log(
+              `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${medal.anchor_info.nick_name}】，UID：${uid}）的观看直播任务`,
+            )
+
+            await new RoomHeart(
+              roomid,
+              area_id,
+              parent_area_id,
+              uid,
+              this.config._watchingProgress[roomid] ?? 0,
+            ).start()
+          }
         }
-      } else {
-        this.status = 'done'
+      }
+
+      if (i === fansMedals.length) {
+        // 没有提早跳出循环，说明所有直播间的观看任务均已完成
         this.config._lastCompleteTime = tsm()
+        this.logger.log('观看直播任务已完成')
+        this.status = 'done'
+      } else {
+        this.status = ''
       }
     } else {
-      if (isNowIn(0, 0, 0, 5)) {
-        this.logger.log('昨天的观看直播任务已经完成过了，等到今天的00:05再执行')
-      } else {
-        this.logger.log('今天已经完成过观看直播任务了')
-        this.status = 'done'
-      }
+      this.status = 'done'
+      this.config._lastCompleteTime = tsm()
     }
 
     const diff = delayToNextMoment()

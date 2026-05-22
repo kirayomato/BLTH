@@ -1,4 +1,4 @@
-import { delayToNextMoment, isNowIn, isTimestampToday, tsm } from '@/library/luxon'
+import { delayToNextMoment, tsm } from '@/library/luxon'
 import BAPI from '@/library/bili-api'
 import { useBiliStore, useModuleStore } from '@/stores'
 import { sleep } from '@/library/utils'
@@ -198,29 +198,21 @@ class LightTask extends MedalModule {
   public async run(): Promise<void> {
     this.logger.log('点亮熄灭勋章模块开始运行')
 
-    if (!isTimestampToday(this.config._lastCompleteTime)) {
-      if (!(await this.waitForFansMedals())) {
-        this.logger.error('粉丝勋章数据不存在，不执行点亮熄灭勋章任务')
-        this.status = 'error'
-        return
-      }
-
-      this.status = 'running'
-      const fansMedals = this.getMedals()
-
-      await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off), this.sendDanmuTask(fansMedals.on)])
-
-      this.config._lastCompleteTime = tsm()
-      this.status = 'done'
-      this.logger.log('点亮熄灭勋章任务已完成')
-    } else {
-      if (isNowIn(0, 0, 0, 5)) {
-        this.logger.log('昨天的给点亮熄灭勋章任务已经完成过了，等到今天的00:05再执行')
-      } else {
-        this.logger.log('今天已经完成过点亮熄灭勋章任务了')
-        this.status = 'done'
-      }
+    if (!(await this.waitForFansMedals())) {
+      this.logger.error('粉丝勋章数据不存在，不执行点亮熄灭勋章任务')
+      this.status = 'error'
+      return
     }
+
+    this.status = 'running'
+    const fansMedals = this.getMedals()
+
+    await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off), this.sendDanmuTask(fansMedals.on)])
+
+    this.config._lastCompleteTime = tsm()
+    this.status = 'done'
+    this.logger.log('点亮熄灭勋章任务已完成')
+
 
     const diff = delayToNextMoment()
     this.nextRunTimer = setTimeout(() => this.run(), diff.ms)
