@@ -30,6 +30,18 @@ interface BapiMethods {
       data_extend?: string,
       web_location?: string,
     ) => Promise<Live.SendMsg>
+    sendEmoji: (
+      msg: string,
+      roomid: number,
+      mode?: number,
+      fontsize?: number,
+      color?: number,
+      bubble?: number,
+      dm_type?: number,
+      statistics?: string,
+      data_extend?: string,
+      web_location?: string
+    ) => Promise<Live.SendMsg>
     likeReport: (
       room_id: number,
       anchor_id: number,

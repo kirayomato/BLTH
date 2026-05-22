@@ -24,6 +24,7 @@ interface ModuleConfig {
         light: {
           enabled: boolean
           danmuList: string[]
+          emojiList: string[]
           _lastCompleteTime: number
         }
         watch: {

@@ -109,7 +109,30 @@ class LightTask extends MedalModule {
 
     return false
   }
-
+  private async sendEmoji(medal: LiveData.FansMedalPanel.List, emoji: string): Promise<boolean> {
+    const room_id = medal.room_info.room_id;
+    const target_id = medal.medal.target_id;
+    const nick_name = medal.anchor_info.nick_name;
+    const medal_name = medal.medal.medal_name;
+    const logMessage = `粉丝勋章【${medal_name}】 在主播【${nick_name}】（UID：${target_id}）的直播间（${room_id}）发送表情 ${emoji}`;
+    try {
+      const response = await BAPI.live.sendEmoji(emoji, room_id);
+      this.logger.log(`BAPI.live.sendMsg(${emoji}, ${room_id})`, response);
+      if (response.code === 0) {
+        if (response.msg === "k") {
+          this.logger.warn(`点亮熄灭勋章-发送表情 ${logMessage} 异常，表情可能包含屏蔽词`);
+        } else {
+          this.logger.log(`点亮熄灭勋章-发送表情 ${logMessage} 成功`);
+          return true;
+        }
+      } else {
+        this.logger.error(`点亮熄灭勋章-发送表情 ${logMessage} 失败`, response.message);
+      }
+    } catch (error) {
+      this.logger.error(`点亮熄灭勋章-发送表情 ${logMessage} 出错`, error);
+    }
+    return false;
+  }
   /**
    * 给正在直播的直播间点赞
    * @param medals

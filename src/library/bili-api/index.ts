@@ -69,6 +69,31 @@ const BAPI: BapiMethods = {
         },
       )
     },
+    sendEmoji: (msg, roomid, mode = 1, fontsize = 25, color = 16777215, bubble = 0, dm_type = 1, statistics = '{"appId":100,"platform":5}', web_location = "444.8", data_extend = '{"trackid":"-99998"}') => {
+      const biliStore = useBiliStore()
+      const bili_jct = biliStore.cookies!.bili_jct
+      return request.live.post(
+        "/msg/send",
+        packFormData({
+          bubble,
+          msg,
+          color,
+          mode,
+          dm_type,
+          // emoticonOptions,
+          data_extend,
+          statistics,
+          fontsize,
+          rnd: ts(),
+          roomid,
+          csrf: bili_jct,
+          csrf_token: bili_jct
+        }),
+        {
+          params: wbiSign({ web_location })
+        }
+      );
+    },
     likeReport: (room_id, anchor_id, click_time = 1, web_location = '444.8') => {
       const biliStore = useBiliStore()
       const bili_jct = biliStore.cookies!.bili_jct
