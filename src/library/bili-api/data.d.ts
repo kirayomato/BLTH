@@ -102,6 +102,17 @@ declare namespace LiveData {
     }
   }
 
+  interface TaskItem {
+    icon: string
+    title: string
+    sub_title: string
+    add_text: string
+    jump_type: string
+    is_done: boolean
+    icon_guard: string
+    icon_admiral: string
+    icon_captain: string
+  }
   namespace SendMsg {
     interface Data {
       mode_info: ModeInfo
