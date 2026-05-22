@@ -34,23 +34,18 @@ class LightTask extends MedalModule {
       off: [],
     }
 
-    fansMedals.forEach((medal) => {
-      if (!this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal) || this.MEDAL_FILTERS.isLighted(medal)) {
-        // 跳过被黑白名单过滤的和已经点亮的粉丝勋章
-        return
-      }
+    const idlist = fansMedals.filter(
+      (medal) => this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal)
+    );
+    idlist.forEach((medal) => {
+      const livingStatus = this.MEDAL_FILTERS.livingStatus(medal);
+      result[livingStatus].push(medal);
+    });
 
-      const livingStatus = this.MEDAL_FILTERS.livingStatus(medal)
-      result[livingStatus].push(medal)
-    })
+    this.sortMedals(result.on)
+    this.sortMedals(result.off)
 
-    if (this.medalTasksConfig.isWhiteList) {
-      // 白名单排序
-      this.sortMedals(result.on)
-      this.sortMedals(result.off)
-    }
-
-    return result
+    return result;
   }
 
   /**
