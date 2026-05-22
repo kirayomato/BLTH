@@ -134,13 +134,16 @@ class LightTask extends MedalModule {
    * @private
    */
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
-    for (let i = 0; i < medals.length; i++) {
-      const medal = medals[i]
-      await this.like(medal, _.random(30, 35))
-
-      if (i < medals.length - 1) {
-        await sleep(_.random(30000, 35000))
+    this.logger.log(`点赞勋章列表(${medals.length}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
+    for (let j = 0; j < 10; j++) {
+      for (let i = 0; i < medals.length; i++) {
+        const medal = medals[i];
+        await this.like(medal, _.random(30, 35));
+        if (i < medals.length - 1) {
+          await sleep(_.random(3e4, 35e3));
+        }
       }
+      await sleep(_.random(5e4, 10e4));
     }
   }
 
@@ -150,22 +153,38 @@ class LightTask extends MedalModule {
    * @private
    */
   private async sendDanmuTask(medals: LiveData.FansMedalPanel.List[]) {
-    let danmuIndex = 0
+    this.logger.log(`发送弹幕列表(${medals.length}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
+    const BATCH_SIZE = 30;      // 每一批处理多少个
 
-    for (let i = 0; i < medals.length; i++) {
-      const medal = medals[i]
-      let target = 10
+    let danmuIndex = 0;
 
-      for (let j = 0; j < target; j++) {
-        const danmuText = this.config.danmuList[danmuIndex++ % this.config.danmuList.length]
+    // 1. 切割批次
+    const batchList = [];
+    for (let i = 0; i < medals.length; i += BATCH_SIZE) {
+      batchList.push(medals.slice(i, i + BATCH_SIZE));
+    }
 
-        if (!(await this.sendDanmu(medal, danmuText))) {
-          // 弹幕发送失败，多尝试一次，每个直播间最多发13条
-          target = Math.min(target + 1, 13)
-        }
+    // 2. 按批次执行：每批都跑满12轮
+    for (const batch of batchList) {
+      // 当前批次执行12轮
+      for (let j = 0; j < 12; j++) {
+        for (let i = 0; i < batch.length; i++) {
+          const medal = batch[i];
 
-        if (i < medals.length - 1 || j < target - 1) {
-          await sleep(_.random(6000, 8000))
+          const success = await this.sendDanmu(
+            medal,
+            this.config.danmuList[danmuIndex++ % this.config.danmuList.length]
+          );
+
+          if (!success) {
+            await sleep(Math.max(150 * 1000 / medals.length, _.random(7000, 10000)));
+            await this.sendEmoji(
+              medal,
+              this.config.emojiList[danmuIndex++ % this.config.emojiList.length]
+            );
+          }
+
+          await sleep(Math.max(150 * 1000 / medals.length, _.random(7000, 10000)));
         }
       }
     }
