@@ -19,7 +19,7 @@ export const useBiliStore = defineStore('bili', () => {
   const fansMedals = ref<LiveData.FansMedalPanel.List[]>()
   // 过滤了不存在直播间的粉丝勋章
   const filteredFansMedals = computed<LiveData.FansMedalPanel.List[]>(
-    () => fansMedals.value?.filter((m) => m.room_info.room_id !== 0) ?? [],
+    () => fansMedals.value?.filter((m) => m.room_info.room_id !== 0 && m.anchor_info.nick_name != "账号已注销") ?? [],
   )
   // 粉丝勋章获取状态（初始值：undefined，获取中：loading，获取成功：loaded，获取失败：error）
   const fansMedalsStatus = ref<FansMedalsStatus>()
