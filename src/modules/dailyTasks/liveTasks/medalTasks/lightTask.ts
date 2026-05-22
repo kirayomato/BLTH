@@ -170,7 +170,12 @@ class LightTask extends MedalModule {
       for (let j = 0; j < 12; j++) {
         for (let i = 0; i < batch.length; i++) {
           const medal = batch[i];
-
+          if (medal.medal.is_lighted) {
+            const [prog, total] = await LightTask.getMissionProgress(medal.medal.target_id, "发弹幕")
+            this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
+            if (total > 0 && prog == total)
+              continue
+          }
           const success = await this.sendDanmu(
             medal,
             this.config.danmuList[danmuIndex++ % this.config.danmuList.length]
@@ -203,7 +208,7 @@ class LightTask extends MedalModule {
       this.status = 'running'
       const fansMedals = this.getMedals()
 
-      await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off)])
+      await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off), this.sendDanmuTask(fansMedals.on)])
 
       this.config._lastCompleteTime = tsm()
       this.status = 'done'
