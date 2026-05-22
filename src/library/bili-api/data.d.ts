@@ -696,7 +696,7 @@ declare namespace LiveData {
       icon: string
     }
 
-    interface LaughRoomInfo {}
+    interface LaughRoomInfo { }
 
     interface PlayerThrottleInfo {
       status: number
@@ -1310,7 +1310,7 @@ declare namespace MainData {
       icon_resource: IconResource
     }
 
-    interface IconResource {}
+    interface IconResource { }
 
     interface OttInfo {
       vip_type: number
@@ -1652,7 +1652,7 @@ declare namespace MainData {
       jump_url: string
     }
 
-    interface Params {}
+    interface Params { }
 
     interface ModuleDispute {
       title: string
