@@ -136,10 +136,11 @@ class LightTask extends MedalModule {
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
     let n = medals.length;
     const batch = medals;
+    batch.reverse();
     this.logger.log(`点赞勋章列表(${n}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
     for (let j = 0; j < 12; j++) {
       for (let i = n - 1; i >= 0; i--) {
-        const medal = medals[i];
+        const medal = batch[i];
         if (medal.medal.is_lighted) {
           const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
           this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
@@ -178,6 +179,7 @@ class LightTask extends MedalModule {
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
       let n = batch.length;
+      batch.reverse();
       for (let j = 0; j < 12; j++) {
         for (let i = n - 1; i >= 0; i--) {
           const medal = batch[i];
