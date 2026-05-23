@@ -62,7 +62,7 @@ class LightTask extends MedalModule {
 
     try {
       const response = await BAPI.live.likeReport(room_id, target_id, click_time)
-      this.logger.log(`BAPI.live.likeReport(${room_id}, ${target_id}, ${click_time})`, response)
+      this.logger.debug(`BAPI.live.likeReport(${room_id}, ${target_id}, ${click_time})`, response)
       if (response.code === 0) {
         this.logger.log(`点亮熄灭勋章-点赞 ${logMessage} 成功`)
       } else {
@@ -87,7 +87,7 @@ class LightTask extends MedalModule {
 
     try {
       const response = await BAPI.live.sendMsg(danmu, room_id)
-      this.logger.log(`BAPI.live.sendMsg(${danmu}, ${room_id})`, response)
+      this.logger.debug(`BAPI.live.sendMsg(${danmu}, ${room_id})`, response)
       if (response.code === 0) {
         if (response.msg === 'k') {
           this.logger.warn(`点亮熄灭勋章-发送弹幕 ${logMessage} 异常，弹幕可能包含屏蔽词`)
@@ -112,7 +112,7 @@ class LightTask extends MedalModule {
     const logMessage = `粉丝勋章【${medal_name}】 在主播【${nick_name}】（UID：${target_id}）的直播间（${room_id}）发送表情 ${emoji}`;
     try {
       const response = await BAPI.live.sendEmoji(emoji, room_id);
-      this.logger.log(`BAPI.live.sendMsg(${emoji}, ${room_id})`, response);
+      this.logger.debug(`BAPI.live.sendEmoji(${emoji}, ${room_id})`, response);
       if (response.code === 0) {
         if (response.msg === "k") {
           this.logger.warn(`点亮熄灭勋章-发送表情 ${logMessage} 异常，表情可能包含屏蔽词`);

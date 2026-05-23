@@ -15,6 +15,9 @@ class Logger {
     ]
   }
 
+  public debug(...data: any[]) {
+    console.debug(...this.prefix, ...data)
+  }
   public log(...data: any[]) {
     console.log(...this.prefix, ...data)
   }

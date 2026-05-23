@@ -101,7 +101,7 @@ class RoomHeart {
   private async E(): Promise<void> {
     try {
       const response = await BAPI.liveTrace.E(this.id, this.device, this.ruid)
-      this.logger.log(
+      this.logger.debug(
         `BAPI.liveTrace.E(${this.id}, ${this.device}, ${this.ruid}) response`,
         response,
       )
@@ -158,7 +158,7 @@ class RoomHeart {
         this.heartBeatInterval,
         spyderData.ts,
       )
-      this.logger.log(
+      this.logger.debug(
         `BAPI.liveTrace.X(${s}, ${this.id}, ${this.device}, ${this.ruid}, ${this.timestamp}, ${this.secretKey}, ${this.heartBeatInterval}, ${spyderData.ts}) response`,
         response,
       )
