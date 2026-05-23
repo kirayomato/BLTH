@@ -139,6 +139,19 @@ const BAPI: BapiMethods = {
         visit_id,
       })
     },
+    /**
+     * 获取激活的粉丝勋章信息，包含任务进度
+     * @param target_id 主播的 UID
+     * @param web_location 网页位置
+     */
+    getActivatedMedalInfo: (target_id: number, web_location = '0.0') => {
+      const bili_jct = useBiliStore().cookies!.bili_jct
+      return request.live.get('/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo', {
+        target_id,
+        csrf: bili_jct,
+        web_location,
+      })
+    },
   },
   liveTrace: {
     E: (id, device, ruid, is_patch = 0, heart_beat = [], web_location = '444.8') => {

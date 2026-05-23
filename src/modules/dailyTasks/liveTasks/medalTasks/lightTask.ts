@@ -141,7 +141,7 @@ class LightTask extends MedalModule {
       for (let i = n - 1; i >= 0; i--) {
         const medal = medals[i];
         if (medal.medal.is_lighted) {
-          const [prog, total] = await LightTask.getMissionProgress(medal.medal.target_id, "点赞30次")
+          const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
           this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
           if (total > 0 && prog == total) {
             [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
@@ -182,7 +182,7 @@ class LightTask extends MedalModule {
         for (let i = n - 1; i >= 0; i--) {
           const medal = batch[i];
           if (medal.medal.is_lighted) {
-            const [prog, total] = await LightTask.getMissionProgress(medal.medal.target_id, "发弹幕")
+            const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "发弹幕")
             this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
             if (total > 0 && prog == total) {
               [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];

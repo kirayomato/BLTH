@@ -40,6 +40,15 @@ declare namespace Live {
     data: { silver: number }
     message: string
   }
+
+  interface GetActivatedMedalInfo {
+    code: number
+    message: string
+    ttl: number
+    data: {
+      task_info: LiveData.TaskItem[]
+    }
+  }
 }
 
 declare namespace LiveTrace {

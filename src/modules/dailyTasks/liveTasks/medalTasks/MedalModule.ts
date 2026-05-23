@@ -5,6 +5,7 @@ import { watch } from 'vue'
 import type { PublicMedalFilters } from './types'
 import { arrayToMap } from '@/library/utils'
 import type { LiveData } from '@/library/bili-api/data'
+import BAPI from '@/library/bili-api'
 
 class MedalModule extends BaseModule {
   medalTasksConfig = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks
@@ -50,89 +51,7 @@ class MedalModule extends BaseModule {
     })
   }
 
-  static async getTaskInfo(targetId: number): Promise<LiveData.TaskItem[] | null> {
-    try {
-      const biliStore = useBiliStore();
-      const bili_jct = biliStore.cookies!.bili_jct;
-      const baseUrl = "https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo";
-      const params = new URLSearchParams({
-        csrf: bili_jct,
-        target_id: targetId.toString(),
-        web_location: "0.0"
-      });
-      const requestUrl = `${baseUrl}?${params.toString()} `;
 
-      // 发起请求
-      const response = await fetch(requestUrl, {
-        headers: {
-          "accept": "*/*",
-          "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-          "cache-control": "no-cache",
-          "pragma": "no-cache",
-          "sec-ch-ua": "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\"",
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": "\"Windows\"",
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
-          "sec-fetch-site": "same-site"
-        },
-        referrer: "https://live.bilibili.com/",
-        method: "GET",
-        mode: "cors",
-        credentials: "include"
-      });
-
-      // 检查HTTP响应状态
-      if (!response.ok) {
-        throw new Error(`请求失败，状态码: ${response.status} `);
-      }
-
-      // 解析响应数据
-      const data = await response.json();
-
-      // 验证数据结构
-      if (!data?.data?.task_info || !Array.isArray(data.data.task_info)) {
-        console.log(data);
-        throw new Error("响应数据格式异常，缺少task_info数组");
-      }
-
-      return data.data.task_info
-    }
-    catch (error) {
-      console.error("处理出错:", error);
-      return null;
-    }
-  }
-
-  static async getMissionProgress(targetId: number, title: string): Promise<[number, number]> {
-    try {
-      const targetTask = await MedalModule.getTaskInfo(targetId)
-      if (!targetTask) {
-        console.log("未找到观看任务");
-        return [0, 0];
-      }
-      for (const task of targetTask) {
-        if (task.title == title) {
-          // 解析sub_title中的x值（匹配类似"每日上限 5/5"格式）
-          const subTitle = task.sub_title;
-          const regex = /每日上限\s*(\d+)\/(\d+)/;
-
-          const match = subTitle?.match(regex);
-          if (match) {
-            const firstNumber = parseInt(match[1], 10);
-            const secondNumber = parseInt(match[2], 10);
-            return [firstNumber, secondNumber];
-          } else {
-            console.log("sub_title格式不符合预期，无法解析x值", targetTask);
-            return [0, 0];
-          }
-        }
-      }
-    } catch (error) {
-      console.error("处理出错:", error);
-    }
-    return [0, 0];
-  }
   sort_live_medals = (a: LiveData.FansMedalPanel.List, b: LiveData.FansMedalPanel.List) => {
     const roomid2 = this.medalTasksConfig.roomidList2
     if (roomid2.includes(a.room_info.room_id) && roomid2.includes(b.room_info.room_id))
@@ -145,6 +64,53 @@ class MedalModule extends BaseModule {
       return b.medal.intimacy - a.medal.intimacy;
     return b.medal.level - a.medal.level;
   };
+
+  /**
+   * 获取粉丝勋章任务信息
+   * @param targetId 主播的 UID
+   * @returns 任务列表，失败返回 null
+   */
+  static async getTaskInfo(targetId: number): Promise<LiveData.TaskItem[] | null> {
+    try {
+      const response = await BAPI.live.getActivatedMedalInfo(targetId)
+      if (response.code === 0 && response.data?.task_info) {
+        return response.data.task_info
+      }
+      return null
+    } catch (error) {
+      console.error('获取任务信息出错:', error)
+      return null
+    }
+  }
+
+  /**
+   * 获取指定任务的进度
+   * @param targetId 主播的 UID
+   * @param title 任务标题
+   * @returns [当前进度, 总进度]
+   */
+  static async getMissionProgress(targetId: number, title: string): Promise<[number, number]> {
+    try {
+      const targetTask = await MedalModule.getTaskInfo(targetId)
+      if (!targetTask) {
+        return [0, 0]
+      }
+      for (const task of targetTask) {
+        if (task.title === title) {
+          const subTitle = task.sub_title
+          const regex = /每日上限\s*(\d+)\/(\d+)/
+          const match = subTitle?.match(regex)
+          if (match) {
+            return [parseInt(match[1], 10), parseInt(match[2], 10)]
+          }
+          return [0, 0]
+        }
+      }
+    } catch (error) {
+      console.error('获取任务进度出错:', error)
+    }
+    return [0, 0]
+  }
 }
 
 export default MedalModule

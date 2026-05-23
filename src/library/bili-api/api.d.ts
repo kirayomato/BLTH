@@ -51,6 +51,7 @@ interface BapiMethods {
     getInfoByRoom: (room_id: number, web_location?: string) => Promise<Live.GetInfoByRoom>
     silver2coin: (visit_id?: string) => Promise<Live.Silver2coin>
     coin2silver: (num: number, platform?: string, visit_id?: string) => Promise<Live.Coin2silver>
+    getActivatedMedalInfo: (target_id: number, web_location?: string) => Promise<Live.GetActivatedMedalInfo>
   }
   liveTrace: {
     E: (
