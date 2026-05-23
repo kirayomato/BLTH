@@ -38,7 +38,7 @@ interface BapiMethods {
       color?: number,
       bubble?: number,
       dm_type?: number,
-      statistics?: string,
+      emoticonOptions?: string,
       data_extend?: string,
       web_location?: string
     ) => Promise<Live.SendMsg>
