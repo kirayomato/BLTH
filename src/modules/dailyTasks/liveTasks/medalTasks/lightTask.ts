@@ -42,8 +42,8 @@ class LightTask extends MedalModule {
       result[livingStatus].push(medal);
     });
 
-    this.sortMedals(result.on)
-    this.sortMedals(result.off)
+    result.on.sort(this.sort_live_medals);
+    result.off.sort(this.sort_live_medals);
 
     return result;
   }

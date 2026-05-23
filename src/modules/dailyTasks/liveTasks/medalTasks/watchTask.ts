@@ -263,18 +263,7 @@ class WatchTask extends MedalModule {
   }
 
   private playerStore = usePlayerStore()
-  sort_live_medals = (a: LiveData.FansMedalPanel.List, b: LiveData.FansMedalPanel.List) => {
-    const roomid = this.medalTasksConfig.roomidList2
-    if (roomid.includes(a.room_info.room_id) && roomid.includes(b.room_info.room_id))
-      return roomid.indexOf(a.room_info.room_id) - roomid.indexOf(b.room_info.room_id);
-    else if (roomid.includes(a.room_info.room_id))
-      return -1;
-    else if (roomid.includes(b.room_info.room_id))
-      return 1;
-    if (a.medal.level === b.medal.level)
-      return b.medal.intimacy - a.medal.intimacy;
-    return b.medal.level - a.medal.level;
-  };
+
   /**
    * 获取粉丝勋章
    * @returns 根据直播状态划分、经过排序和过滤的粉丝勋章

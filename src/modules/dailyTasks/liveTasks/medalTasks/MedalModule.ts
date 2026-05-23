@@ -133,6 +133,18 @@ class MedalModule extends BaseModule {
     }
     return [0, 0];
   }
+  sort_live_medals = (a: LiveData.FansMedalPanel.List, b: LiveData.FansMedalPanel.List) => {
+    const roomid2 = this.medalTasksConfig.roomidList2
+    if (roomid2.includes(a.room_info.room_id) && roomid2.includes(b.room_info.room_id))
+      return roomid2.indexOf(a.room_info.room_id) - roomid2.indexOf(b.room_info.room_id);
+    else if (roomid2.includes(a.room_info.room_id))
+      return -1;
+    else if (roomid2.includes(b.room_info.room_id))
+      return 1;
+    if (a.medal.level === b.medal.level)
+      return b.medal.intimacy - a.medal.intimacy;
+    return b.medal.level - a.medal.level;
+  };
 }
 
 export default MedalModule
