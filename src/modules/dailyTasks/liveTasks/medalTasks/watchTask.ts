@@ -92,6 +92,7 @@ class RoomHeart {
       this.logger.error(`缺少buvid，无法为直播间 ${this.roomID} 执行观看直播任务，请尝试刷新页面`)
       return Promise.resolve()
     }
+    this.watchedSeconds = 0
     return this.E()
   }
 
@@ -176,7 +177,7 @@ class RoomHeart {
             return;
           }
         }
-        else if (this.watchedSeconds >= this.config.time * 60) {
+        if (this.watchedSeconds >= this.config.time * 60) {
           return;
         }
         ; ({
