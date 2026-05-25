@@ -141,8 +141,8 @@ class LightTask extends MedalModule {
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
     let n = medals.length;
     const batch = medals;
+    this.logger.log(`点赞勋章列表(${n}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
     batch.reverse();
-    this.logger.log(`点赞勋章列表(${n}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
     for (let j = 0; j < 12; j++) {
       for (let i = n - 1; i >= 0; i--) {
         const medal = batch[i];
@@ -170,7 +170,6 @@ class LightTask extends MedalModule {
    * @private
    */
   private async sendDanmuTask(medals: LiveData.FansMedalPanel.List[]) {
-    this.logger.log(`发送弹幕列表(${medals.length}): ${medals.map(medal => medal.anchor_info.nick_name)}`)
     const BATCH_SIZE = 30;      // 每一批处理多少个
 
     let danmuIndex = 0;
@@ -184,6 +183,7 @@ class LightTask extends MedalModule {
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
       let n = batch.length;
+      this.logger.log(`发送弹幕列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
       batch.reverse();
       for (let j = 0; j < 12; j++) {
         for (let i = n - 1; i >= 0; i--) {
