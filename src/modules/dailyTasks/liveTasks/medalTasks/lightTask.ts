@@ -36,6 +36,11 @@ class LightTask extends MedalModule {
 
     const idlist = fansMedals.filter(
       (medal) => this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal)
+        &&
+        (
+          this.MEDAL_FILTERS.livingStatus(medal) == "on" ||
+          this.medalTasksConfig.roomidList2.includes(medal.room_info.room_id)
+        )
     );
     idlist.forEach((medal) => {
       const livingStatus = this.MEDAL_FILTERS.livingStatus(medal);
