@@ -162,6 +162,7 @@ class LightTask extends MedalModule {
       }
       await sleep(_.random(5e4, 10e4));
     }
+    this.logger.log('点赞任务已完成')
   }
 
   /**
@@ -214,6 +215,7 @@ class LightTask extends MedalModule {
         }
       }
     }
+    this.logger.log('发送弹幕任务已完成')
   }
 
   public async run(): Promise<void> {
