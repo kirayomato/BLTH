@@ -143,6 +143,10 @@ const defaultValues: DefaultValues = {
       invisibility: {
         enabled: false,
       },
+      autoRestart: {
+        enabled: false,
+        intervalMinutes: 60,
+      },
     },
     RemoveElement: {
       removePKBox: {

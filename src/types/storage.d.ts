@@ -69,10 +69,14 @@ interface ModuleConfig {
     noSleep: {
       enabled: boolean
     }
-    invisibility: {
-      enabled: boolean
+      invisibility: {
+        enabled: boolean
+      }
+      autoRestart: {
+        enabled: boolean
+        intervalMinutes: number
+      }
     }
-  }
   RemoveElement: {
     removePKBox: {
       enabled: boolean
