@@ -167,16 +167,15 @@ class RoomHeart {
         this.seq += 1
         this.updateProgress()
         const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看直播满15分钟")
-        if (total != 0) {
-          if (prog != this.progress || this.progress == -1) {
-            this.progress = prog;
-            this.logger.log(`${this.roomID} 观看直播进度: ${prog}/${total}`)
-          }
-          if (prog == total) {
-            this.logger.log(`${this.roomID} 观看直播进度已满，观看结束`)
-            return;
-          }
+        if (prog != this.progress || this.progress == -1) {
+          this.progress = prog;
+          this.logger.log(`${this.roomID} 观看直播进度: ${prog}/${total}`)
         }
+        if (prog == total) {
+          this.logger.log(`${this.roomID} 观看直播进度已满，观看结束`)
+          return;
+        }
+
         if (this.watchedSeconds >= this.config.time * 60) {
           return;
         }

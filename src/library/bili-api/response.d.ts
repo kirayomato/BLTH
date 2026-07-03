@@ -46,7 +46,25 @@ declare namespace Live {
     message: string
     ttl: number
     data: {
-      task_info: LiveData.TaskItem[]
+      face: string
+      name: string
+      medal_name: string
+      fans_medal_count: number
+      level: number
+      is_lighted: boolean
+      intimacy: number
+      next_intimacy: number
+      task_light_days: number
+      task_info: TaskInfo[]
+      fans_club_gift_info: FansClubGiftInfo
+      medal_color_border: string
+      medal_color: string
+      medal_color_text: string
+      medal_color_level: string
+      guard_level: number
+      light_source: number
+      free_intimacy: number
+      reach_free_intimacy_limit: boolean
     }
   }
 }

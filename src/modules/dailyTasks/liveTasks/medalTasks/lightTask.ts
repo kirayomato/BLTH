@@ -149,7 +149,7 @@ class LightTask extends MedalModule {
         if (medal.medal.is_lighted) {
           const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
           this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
-          if (total > 0 && prog == total) {
+          if (prog == total) {
             [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
             n--;
             continue
@@ -192,7 +192,7 @@ class LightTask extends MedalModule {
           if (medal.medal.is_lighted) {
             const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "发弹幕")
             this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
-            if (total > 0 && prog == total) {
+            if (prog == total) {
               [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
               n--;
               continue

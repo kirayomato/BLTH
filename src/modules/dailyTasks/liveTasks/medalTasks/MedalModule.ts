@@ -73,9 +73,16 @@ class MedalModule extends BaseModule {
   static async getTaskInfo(targetId: number): Promise<LiveData.TaskItem[] | null> {
     try {
       const response = await BAPI.live.getActivatedMedalInfo(targetId)
-      if (response.code === 0 && response.data?.task_info) {
-        console.debug('BAPI.live.getActivatedMedalInfo response', response)
-        return response.data.task_info
+      if (response.code === 0) {
+        const data = response.data;
+        if (data.reach_free_intimacy_limit) {
+          console.warn(`${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`)
+          return null
+        }
+        if (data.task_info) {
+          console.debug('BAPI.live.getActivatedMedalInfo response', response)
+          return data.task_info
+        }
       }
       return null
     } catch (error) {
