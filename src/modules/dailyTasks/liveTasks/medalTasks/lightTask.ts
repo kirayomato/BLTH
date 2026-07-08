@@ -139,28 +139,35 @@ class LightTask extends MedalModule {
    * @private
    */
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
-    let n = medals.length;
-    const batch = medals;
-    this.logger.log(`点赞勋章列表(${n}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
-    batch.reverse();
-    for (let j = 0; j < 12; j++) {
-      for (let i = n - 1; i >= 0; i--) {
-        const medal = batch[i];
-        if (medal.medal.is_lighted) {
-          const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
-          this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
-          if (prog == total) {
-            [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
-            n--;
-            continue
+    const BATCH_SIZE = 10;      // 每一批处理多少个
+
+    // 1. 切割批次
+    const batchList = [];
+    for (let i = 0; i < medals.length; i += BATCH_SIZE) {
+      batchList.push(medals.slice(i, i + BATCH_SIZE));
+    }
+
+    // 2. 按批次执行：每批都跑满12轮
+    for (const batch of batchList) {
+      let n = batch.length;
+      this.logger.log(`点赞列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
+      batch.reverse();
+      for (let j = 0; j < 12; j++) {
+        for (let i = n - 1; i >= 0; i--) {
+          const medal = batch[i];
+          if (medal.medal.is_lighted) {
+            const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
+            this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
+            if (prog == total) {
+              [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
+              n--;
+              continue
+            }
           }
-        }
-        await this.like(medal, _.random(30, 35));
-        if (i < medals.length - 1) {
-          await sleep(_.random(3e4, 35e3));
+          await this.like(medal, _.random(30, 35));
+          await sleep(_.random(1e4, 3e4));
         }
       }
-      await sleep(_.random(5e4, 10e4));
     }
     this.logger.log('点赞任务已完成')
   }
@@ -171,7 +178,7 @@ class LightTask extends MedalModule {
    * @private
    */
   private async sendDanmuTask(medals: LiveData.FansMedalPanel.List[]) {
-    const BATCH_SIZE = 30;      // 每一批处理多少个
+    const BATCH_SIZE = 10;      // 每一批处理多少个
 
     let danmuIndex = 0;
 
@@ -203,15 +210,16 @@ class LightTask extends MedalModule {
             this.config.danmuList[danmuIndex++ % this.config.danmuList.length]
           );
 
+          const sleep_time = Math.max(300 / batch.length * 1e3, 1e4)+ _.random(1e4, 3e4);
           if (!success) {
-            await sleep(Math.max(150 * 1000 / batch.length, _.random(10e3, 15e3)));
+            await sleep(sleep_time);
             await this.sendEmoji(
               medal,
               this.config.emojiList[danmuIndex++ % this.config.emojiList.length]
             );
           }
 
-          await sleep(Math.max(150 * 1000 / batch.length, _.random(10e3, 15e3)));
+          await sleep(sleep_time);
         }
       }
     }
