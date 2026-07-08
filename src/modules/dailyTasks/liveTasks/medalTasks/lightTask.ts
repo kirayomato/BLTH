@@ -163,8 +163,16 @@ class LightTask extends MedalModule {
               n--;
               continue
             }
+            await this.like(medal, _.random(30, 40));
+            const [_prog, _total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
+            if (_prog == prog) {
+              this.logger.warn('当日点赞已经达到上限')
+              return
+            }
           }
-          await this.like(medal, _.random(30, 40));
+          else {
+            await this.like(medal, _.random(30, 40));
+          }
           await sleep(_.random(5e3, 15e3));
         }
       }
