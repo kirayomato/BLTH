@@ -164,8 +164,8 @@ class LightTask extends MedalModule {
               continue
             }
           }
-          await this.like(medal, _.random(30, 35));
-          await sleep(_.random(1e4, 3e4));
+          await this.like(medal, _.random(30, 40));
+          await sleep(_.random(5e3, 15e3));
         }
       }
     }
@@ -178,7 +178,7 @@ class LightTask extends MedalModule {
    * @private
    */
   private async sendDanmuTask(medals: LiveData.FansMedalPanel.List[]) {
-    const BATCH_SIZE = 10;      // 每一批处理多少个
+    const BATCH_SIZE = 20;      // 每一批处理多少个
 
     let danmuIndex = 0;
 
@@ -210,7 +210,7 @@ class LightTask extends MedalModule {
             this.config.danmuList[danmuIndex++ % this.config.danmuList.length]
           );
 
-          const sleep_time = Math.max(300 / batch.length * 1e3, 1e4)+ _.random(1e4, 3e4);
+          const sleep_time = 300 / batch.length * 1e3 + _.random(1e4, 3e4);
           if (!success) {
             await sleep(sleep_time);
             await this.sendEmoji(
