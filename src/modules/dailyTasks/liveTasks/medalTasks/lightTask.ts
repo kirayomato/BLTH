@@ -159,6 +159,10 @@ class LightTask extends MedalModule {
             const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
             this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
             if (prog == total || j - prog > 3) {
+              if(j-prog>3)
+              {
+                this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
+              }
               [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
               n--;
               continue
