@@ -155,18 +155,26 @@ class LightTask extends MedalModule {
       for (let j = 0; j < 12; j++) {
         for (let i = n - 1; i >= 0; i--) {
           const medal = batch[i];
+          let flag = 1;
+          const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id);
+          if (liveStatus == 0) {
+            this.logger.warn(`${medal.anchor_info.nick_name} 已经下播，跳过点赞任务`)
+            flag = 0;
+          }
           if (medal.medal.is_lighted) {
             const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
             this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
-            if (prog == total || j - prog > 3) {
-              if(j-prog>3)
-              {
+            if (prog == total || j - prog > 2) {
+              if (j - prog > 2) {
                 this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
               }
-              [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
-              n--;
-              continue
+              flag = 0;
             }
+          }
+          if (flag == 0) {
+            [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
+            n--;
+            continue
           }
           await this.like(medal, _.random(30, 40));
 
@@ -201,14 +209,23 @@ class LightTask extends MedalModule {
       for (let j = 0; j < 12; j++) {
         for (let i = n - 1; i >= 0; i--) {
           const medal = batch[i];
+          let flag = 1;
+          const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id);
+          if (liveStatus == 1) {
+            this.logger.warn(`${medal.anchor_info.nick_name} 检测到直播中，跳过发送弹幕任务`)
+            flag = 0;
+          }
           if (medal.medal.is_lighted) {
             const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "发弹幕")
             this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
             if (prog == total) {
-              [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
-              n--;
-              continue
+              flag = 0
             }
+          }
+          if (flag == 0) {
+            [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
+            n--;
+            continue
           }
           const success = await this.sendDanmu(
             medal,
