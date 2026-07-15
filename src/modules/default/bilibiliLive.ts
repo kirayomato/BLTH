@@ -32,7 +32,7 @@ class BilibiliLive extends BaseModule {
         },
       })
 
-      setTimeout(() => reject(new Error('获取 BilibiliLive 超时')), 10e3)
+      setTimeout(() => reject(new Error('获取 BilibiliLive 超时')), 60e3)
     })
   }
 
