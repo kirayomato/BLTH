@@ -97,6 +97,7 @@ const defaultValues: DefaultValues = {
               "official_134"
             ],
             _lastCompleteTime: 0,
+            _todayLightLikes: 0,
           },
           watch: {
             enabled: false,

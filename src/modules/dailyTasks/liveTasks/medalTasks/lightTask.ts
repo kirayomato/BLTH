@@ -1,4 +1,4 @@
-import { delayToNextMoment, tsm } from '@/library/luxon'
+import { delayToNextMoment, isTimestampToday, tsm } from '@/library/luxon'
 import BAPI from '@/library/bili-api'
 import { useBiliStore, useModuleStore } from '@/stores'
 import { sleep } from '@/library/utils'
@@ -140,6 +140,20 @@ class LightTask extends MedalModule {
    */
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
     const BATCH_SIZE = 10;      // 每一批处理多少个
+    const DAILY_LIKE_LIMIT = 5000; // 每日点赞上限
+
+    // 从持久化配置中读取今日已点赞次数，跨天自动重置
+    if (!isTimestampToday(this.config._lastCompleteTime)) {
+      this.config._todayLightLikes = 0
+    }
+    let totalLikes = this.config._todayLightLikes
+
+    this.logger.log(`今日已点赞 ${totalLikes} 次（上限 ${DAILY_LIKE_LIMIT}）`)
+
+    if (totalLikes >= DAILY_LIKE_LIMIT) {
+      this.logger.log('今日点赞已达上限，跳过点赞任务')
+      return
+    }
 
     // 1. 切割批次
     const batchList = [];
@@ -149,11 +163,14 @@ class LightTask extends MedalModule {
 
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
+      if (totalLikes >= DAILY_LIKE_LIMIT) break;
       let n = batch.length;
       this.logger.log(`点赞列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
       batch.reverse();
       for (let j = 0; j < 12; j++) {
+        if (totalLikes >= DAILY_LIKE_LIMIT) break;
         for (let i = n - 1; i >= 0; i--) {
+          if (totalLikes >= DAILY_LIKE_LIMIT) break;
           const medal = batch[i];
           let flag = 1;
           const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id);
@@ -176,13 +193,16 @@ class LightTask extends MedalModule {
             n--;
             continue
           }
-          await this.like(medal, _.random(30, 40));
+          const likeCount = _.random(30, 40);
+          await this.like(medal, likeCount);
+          totalLikes += likeCount;
+          this.config._todayLightLikes = totalLikes
 
           await sleep(_.random(5e3, 15e3));
         }
       }
     }
-    this.logger.log('点赞任务已完成')
+    this.logger.log(`点赞任务已完成，本日总点赞次数: ${totalLikes}`)
   }
 
   /**
