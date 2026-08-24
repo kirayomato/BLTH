@@ -79,9 +79,17 @@ class MedalModule extends BaseModule {
       return -1;
     else if (roomid2.includes(b.room_info.room_id))
       return 1;
+    // - 返回 **负数**：a 放前面
+    // - 返回 **正数**：b 放前面
+    // - 返回 **0**：顺序不变
+    let flag = 0;
     if (a.medal.level === b.medal.level)
-      return b.medal.intimacy - a.medal.intimacy;
-    return b.medal.level - a.medal.level;
+      flag = b.medal.intimacy - a.medal.intimacy;
+    else
+      flag = b.medal.level - a.medal.level;
+    if (Math.min(a.medal.level, b.medal.level) <= 15)
+      return -flag
+    return flag
   };
 
   /**
@@ -189,8 +197,8 @@ class MedalModule extends BaseModule {
     getDelay: () => Promise<void>,
     requester: () => Promise<T>,
   ): Promise<T> {
-    const task = MedalModule.requestQueues[queueKey].catch(() => {}).then(() => requester())
-    MedalModule.requestQueues[queueKey] = task.catch(() => {}).then(() => getDelay())
+    const task = MedalModule.requestQueues[queueKey].catch(() => { }).then(() => requester())
+    MedalModule.requestQueues[queueKey] = task.catch(() => { }).then(() => getDelay())
     return task
   }
 
