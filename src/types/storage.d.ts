@@ -23,6 +23,10 @@ interface ModuleConfig {
       medalTasks: {
         light: {
           enabled: boolean
+          /** 点赞功能开关 */
+          likeEnabled: boolean
+          /** 弹幕功能开关 */
+          danmuEnabled: boolean
           danmuList: string[]
           emojiList: string[]
           _lastCompleteTime: number

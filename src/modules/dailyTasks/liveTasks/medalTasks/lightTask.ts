@@ -288,7 +288,19 @@ class LightTask extends MedalModule {
     this.status = 'running'
     const fansMedals = this.getMedals()
 
-    await Promise.allSettled([this.likeTask(fansMedals.on), this.sendDanmuTask(fansMedals.off)])
+    const tasks: Promise<void>[] = []
+    if (this.config.likeEnabled) {
+      tasks.push(this.likeTask(fansMedals.on))
+    } else {
+      this.logger.log('点赞功能已关闭，跳过点赞任务')
+    }
+    if (this.config.danmuEnabled) {
+      tasks.push(this.sendDanmuTask(fansMedals.off))
+    } else {
+      this.logger.log('弹幕功能已关闭，跳过发送弹幕任务')
+    }
+
+    await Promise.allSettled(tasks)
 
     this.config._lastCompleteTime = tsm()
     this.status = 'done'

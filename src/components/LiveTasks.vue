@@ -177,6 +177,16 @@ function handleRowClick(row: MedalInfoRow) {
     <el-row>
       <el-space wrap :size="[8, 0]">
         <el-switch v-model="config.medalTasks.light.enabled" active-text="点亮熄灭勋章" />
+        <el-switch
+          v-model="config.medalTasks.light.likeEnabled"
+          active-text="点赞"
+          :disabled="!config.medalTasks.light.enabled"
+        />
+        <el-switch
+          v-model="config.medalTasks.light.danmuEnabled"
+          active-text="弹幕"
+          :disabled="!config.medalTasks.light.enabled"
+        />
         <el-button
           type="primary"
           size="small"

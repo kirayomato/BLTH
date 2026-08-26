@@ -20,3 +20,4 @@ dist
 # ESLint cache
 .eslintcache
 /.mimocode
+/.workbuddy
