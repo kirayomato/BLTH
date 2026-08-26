@@ -141,7 +141,11 @@ class LightTask extends MedalModule {
   private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
     const BATCH_SIZE = 10;      // 每一批处理多少个
     const DAILY_LIKE_LIMIT = 5000; // 每日点赞上限
-
+    const d = new Date();
+    const hours = d.getHours();         // 时
+    if (hours < 2) {
+      this.logger.log(`0-2点自动跳过点赞任务`)
+    }
     // 从持久化配置中读取今日已点赞次数，跨天自动重置
     if (!isTimestampToday(this.config._lastCompleteTime)) {
       this.config._todayLightLikes = 0
@@ -212,7 +216,11 @@ class LightTask extends MedalModule {
    */
   private async sendDanmuTask(medals: LiveData.FansMedalPanel.List[]) {
     const BATCH_SIZE = 20;      // 每一批处理多少个
-
+    const d = new Date();
+    const hours = d.getHours();         // 时
+    if (hours >= 19 || hours < 2) {
+      this.logger.log(`19-2点自动跳过弹幕任务`)
+    }
     let danmuIndex = 0;
 
     // 1. 切割批次
