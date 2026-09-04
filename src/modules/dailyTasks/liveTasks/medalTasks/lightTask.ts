@@ -145,6 +145,7 @@ class LightTask extends MedalModule {
     const hours = d.getHours();         // 时
     if (hours < 2) {
       this.logger.log(`0-2点自动跳过点赞任务`)
+      return
     }
     // 从持久化配置中读取今日已点赞次数，跨天自动重置
     if (!isTimestampToday(this.config._lastCompleteTime)) {
@@ -218,8 +219,9 @@ class LightTask extends MedalModule {
     const BATCH_SIZE = 20;      // 每一批处理多少个
     const d = new Date();
     const hours = d.getHours();         // 时
-    if (hours >= 19 || hours < 2) {
-      this.logger.log(`19-2点自动跳过弹幕任务`)
+    if (hours >= 19 && hours < 23) {
+      this.logger.log(`19-23点自动跳过弹幕任务`)
+      return
     }
     let danmuIndex = 0;
 
