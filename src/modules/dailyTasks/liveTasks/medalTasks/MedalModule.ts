@@ -279,6 +279,9 @@ class MedalModule extends BaseModule {
           console.warn(`${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`)
           return null
         }
+        else if (data.free_intimacy > 0) {
+          console.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`);
+        }
         if (data.task_info) {
           console.debug('BAPI.live.getActivatedMedalInfo response', response)
           return data.task_info
