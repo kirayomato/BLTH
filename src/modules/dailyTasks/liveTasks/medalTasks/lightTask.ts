@@ -262,7 +262,7 @@ class LightTask extends MedalModule {
             this.config.danmuList[danmuIndex++ % this.config.danmuList.length]
           );
 
-          const sleep_time = 300 / batch.length * 1e3 + _.random(1e4, 3e4);
+          const sleep_time = 300 / batch.length * 1e3 + _.random(5e3, 1e4);
           if (!success) {
             await sleep(sleep_time);
             await this.sendEmoji(
