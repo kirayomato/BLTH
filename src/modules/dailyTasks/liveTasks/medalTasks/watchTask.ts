@@ -131,6 +131,10 @@ class RoomHeart {
    * X心跳，E心跳过后都是X心跳
    */
   private async X(): Promise<void> {
+    if (!this.config.enabled) {
+      this.logger.log(`观看直播开关已关闭，停止直播间 ${this.roomID} 的X心跳`)
+      return
+    }
     if (isNowIn(23, 59, 0, 5)) {
       this.logger.log(`即将或刚刚发生跨天，停止直播间 ${this.roomID} 的X心跳`)
       return
@@ -354,6 +358,10 @@ class WatchTask extends MedalModule {
       let i: number
 
       for (i = 0; i < fansMedals.length; i++) {
+        if (!this.config.enabled) {
+          this.logger.log('观看直播开关已关闭，停止观看直播任务')
+          break
+        }
         if (isNowIn(23, 55, 0, 5)) {
           this.logger.log('即将或刚刚发生跨天，提早结束本轮观看直播任务')
           break

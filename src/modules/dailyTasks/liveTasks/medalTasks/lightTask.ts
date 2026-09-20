@@ -168,13 +168,17 @@ class LightTask extends MedalModule {
 
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
-      if (totalLikes >= DAILY_LIKE_LIMIT) break;
+      if (totalLikes >= DAILY_LIKE_LIMIT || !this.config.likeEnabled) break;
       let n = batch.length;
       this.logger.log(`点赞列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
       batch.reverse();
       for (let j = 0; j < 12; j++) {
-        if (totalLikes >= DAILY_LIKE_LIMIT) break;
+        if (totalLikes >= DAILY_LIKE_LIMIT || !this.config.likeEnabled) break;
         for (let i = n - 1; i >= 0; i--) {
+          if (!this.config.likeEnabled) {
+            this.logger.log('点赞开关已关闭，停止点赞任务')
+            break
+          }
           if (totalLikes >= DAILY_LIKE_LIMIT) break;
           const medal = batch[i];
           let flag = 1;
@@ -209,11 +213,12 @@ class LightTask extends MedalModule {
     }
     this.logger.log(`点赞任务已完成，本日总点赞次数: ${totalLikes}`)
     // 点赞任务完成一次执行后自动关闭开关，避免后续重复执行
-    if (medals.length > 0) {
+    // 仅在自然跑完且开关仍开启时关闭；若已被用户中途关闭则不重复操作
+    if (medals.length === 0) {
+      this.logger.log('没有正在直播的粉丝勋章，点赞开关保持开启')
+    } else if (this.config.likeEnabled) {
       this.config.likeEnabled = false
       this.logger.log('点赞任务已完成一次执行，点赞开关已自动关闭')
-    } else {
-      this.logger.log('没有正在直播的粉丝勋章，点赞开关保持开启')
     }
   }
 
@@ -240,11 +245,17 @@ class LightTask extends MedalModule {
 
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
+      if (!this.config.danmuEnabled) break;
       let n = batch.length;
       this.logger.log(`发送弹幕列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
       batch.reverse();
       for (let j = 0; j < 12; j++) {
+        if (!this.config.danmuEnabled) break;
         for (let i = n - 1; i >= 0; i--) {
+          if (!this.config.danmuEnabled) {
+            this.logger.log('弹幕开关已关闭，停止发送弹幕任务')
+            break
+          }
           const medal = batch[i];
           let flag = 1;
           const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id);

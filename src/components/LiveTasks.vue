@@ -169,6 +169,33 @@ function handleRowClick(row: MedalInfoRow) {
     config.medalTasks.roomidList = selection.map((row) => row.roomid)
   }
 }
+
+// 开关即时生效：打开「点赞/弹幕」开关后立即重跑一次该模块，
+// 不必等待下一次定时运行（默认次日 00:05），也无需手动点击状态徽标。
+// 为避免与正在运行的实例并发，仅在模块当前未运行时触发；
+// 运行中变更开关则顺延至下一次运行生效。自动关闭（true→false）不触发。
+watch(
+  () => [config.medalTasks.light.likeEnabled, config.medalTasks.light.danmuEnabled],
+  ([likeNew, danmuNew], [likeOld, danmuOld]) => {
+    const turnedOn = (likeNew && !likeOld) || (danmuNew && !danmuOld)
+    if (!turnedOn) return
+    if (moduleStore.moduleStatus.DailyTasks.LiveTasks.medalTasks.light === 'running') return
+    if (!moduleStore.moduleInstances['DailyTask_LiveTask_LightTask']) return
+    moduleStore.rerunModule('DailyTask_LiveTask_LightTask')
+  },
+)
+
+// 观看直播开关即时生效：打开后立即重跑一次该模块，不必等待下一次定时运行（默认次日 00:05）。
+// 仅在 false→true 时触发；模块运行中或实例未加载时跳过，避免并发重复运行与异常。
+watch(
+  () => config.medalTasks.watch.enabled,
+  (newVal, oldVal) => {
+    if (!newVal || oldVal) return
+    if (moduleStore.moduleStatus.DailyTasks.LiveTasks.medalTasks.watch === 'running') return
+    if (!moduleStore.moduleInstances['DailyTask_LiveTask_WatchTask']) return
+    moduleStore.rerunModule('DailyTask_LiveTask_WatchTask')
+  },
+)
 </script>
 
 <template>
