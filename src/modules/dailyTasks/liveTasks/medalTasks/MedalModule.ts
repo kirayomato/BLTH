@@ -55,18 +55,38 @@ class MedalModule extends BaseModule {
   protected waitForFansMedals(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       const { fansMedalsStatus } = storeToRefs(useBiliStore())
+
+      // 已处于终态时直接结算，不必依赖后续变化
       if (fansMedalsStatus.value === 'loaded') {
         resolve(true)
-      } else {
-        const unwatch = watch(fansMedalsStatus, (newValue) => {
-          if (newValue === 'loaded') {
-            unwatch()
-            resolve(true)
-          } else if (newValue === 'error') {
-            unwatch()
-            resolve(false)
-          }
-        })
+        return
+      }
+      if (fansMedalsStatus.value === 'error') {
+        resolve(false)
+        return
+      }
+
+      const unwatch = watch(fansMedalsStatus, (status) => {
+        if (status === 'loaded') {
+          unwatch()
+          resolve(true)
+        } else if (status === 'error') {
+          unwatch()
+          resolve(false)
+        }
+      })
+
+      // undefined 表示粉丝勋章数据从未开始加载（例如今天已完成过勋章任务，
+      // Default_FansMedals 因此未请求），此时不会再有任何状态变化，
+      // 需主动触发一次强制获取，否则该 Promise 永远无法结算
+      if (fansMedalsStatus.value === undefined) {
+        try {
+          Promise.resolve(useModuleStore().rerunModule('Default_FansMedals', true)).catch(() => {})
+        } catch {
+          // 模块实例不存在，按获取失败处理，交由调用方决定是否继续
+          unwatch()
+          resolve(false)
+        }
       }
     })
   }
