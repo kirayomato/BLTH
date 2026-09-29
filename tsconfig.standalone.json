@@ -1,0 +1,24 @@
+{
+  "include": ["standalone/**/*", "standalone/web/**/*.vue", "env.d.ts", "src/types/**/*"],
+  // 该文件为控制面板的 Vue 组件注册全局类型，会牵出 .vue 文件，独立运行版用不到
+  "exclude": ["src/types/vue.d.ts"],
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    // 刻意不引入 @types/node：它的全局声明会把 setTimeout 的返回类型换成
+    // NodeJS.Timeout，与共享源码里 BaseModule.nextRunTimer 的 number 冲突。
+    // 需要的 Node API 由 standalone/node-shim.d.ts 声明。
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": false,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}

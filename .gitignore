@@ -16,6 +16,15 @@ notes
 
 # Build output
 dist
+dist-standalone
+dist-web
+
+# Standalone runtime
+cookie.txt
+data
+
+# Scratch
+tmp
 
 # ESLint cache
 .eslintcache

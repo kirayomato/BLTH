@@ -64,7 +64,10 @@ npm run dev
 BLTH
 ├─.vscode
 ├─dist                     npm run build 得到的用户脚本
+├─dist-standalone          npm run build 得到的独立运行版
+├─dist-web                 独立运行版配置页面的构建产物，会被内联进上者
 ├─scripts                  一些npm scripts，通过 npm run ... 调用
+├─standalone               独立运行版的环境适配、入口与配置页面
 └─src
     ├─assets               资源文件
     │  └─css
@@ -150,7 +153,9 @@ npm run format
 npm run build
 ```
 
-这会在`dist`文件夹下生成一个后缀为`.user.js`的文件和一个后缀为`.min.user.js`的文件，分别是未压缩的和压缩后的用户脚本。
+这会在`dist`文件夹下生成一个后缀为`.user.js`的文件和一个后缀为`.min.user.js`的文件，分别是未压缩的和压缩后的用户脚本，同时会在`dist-standalone`文件夹下生成不依赖浏览器的独立运行版。
+
+如果只想构建其中一个，可以使用`npm run build-minify`（仅用户脚本）或`npm run build-standalone`（仅独立运行版）。
 
 最后输入以下命令在浏览器中打开预览页面：
 
