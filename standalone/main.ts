@@ -10,7 +10,13 @@ import * as defaultModules from '@/modules/default'
 import * as dailyModules from '@/modules/dailyTasks'
 import { useBiliStore, useModuleStore } from '@/stores'
 import { options } from './config'
-import { getCriticalError, loadModule, runModule, startWatchdog } from './runner'
+import {
+  getCriticalError,
+  loadModule,
+  registerTaskModules,
+  runModule,
+  startWatchdog,
+} from './runner'
 import { startConfigServer } from './server'
 import { storage } from './storage'
 
@@ -70,6 +76,9 @@ async function bootstrap(): Promise<void> {
   // 触发 store 初始化：读取配置文件，并注册配置变更后的写盘逻辑
   useModuleStore()
   logger.log(`模块配置：${storage.path}`)
+
+  // 登记需要兜底调度与看门狗保护的任务模块
+  registerTaskModules(TASK_MODULE_NAMES)
 
   // 默认模块按序完成首次运行，任务模块依赖它们产出的数据
   for (const name of DEFAULT_MODULE_NAMES) {
