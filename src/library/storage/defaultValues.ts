@@ -41,6 +41,7 @@ const defaultValues: DefaultValues = {
             enabled: false,
             likeEnabled: true,
             danmuEnabled: true,
+            reserveLikeRoomids: [],
             danmuList: [
               '(⌒▽⌒)',
               '（￣▽￣）',
@@ -100,6 +101,7 @@ const defaultValues: DefaultValues = {
             ],
             _lastCompleteTime: 0,
             _todayLightLikes: 0,
+            _todayReserveLikes: {},
           },
           watch: {
             enabled: false,

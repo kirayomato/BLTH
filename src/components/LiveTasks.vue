@@ -73,6 +73,43 @@ const handleAddDanmu = () => {
     .catch(() => {})
 }
 
+const reserveLikePanelVisible = ref<boolean>(false)
+const reserveLikeTableData = computed(() =>
+  config.medalTasks.light.reserveLikeRoomids.map((roomid) => {
+    const medal = biliStore.filteredFansMedals.find((m) => m.room_info.room_id === roomid)
+    return {
+      roomid,
+      nick_name: medal ? medal.anchor_info.nick_name : '不在粉丝勋章列表中',
+    }
+  }),
+)
+
+const handleDeleteReserveLike = (index: number) => {
+  config.medalTasks.light.reserveLikeRoomids.splice(index, 1)
+}
+
+const handleAddReserveLike = () => {
+  ElMessageBox.prompt('请输入要预留点赞的直播间号', '新增预留直播间', {
+    confirmButtonText: '确认',
+    cancelButtonText: '取消',
+    inputPattern: /^\d+$/,
+    inputErrorMessage: '直播间号应为数字',
+    lockScroll: false,
+  })
+    .then(({ value }) => {
+      const roomid = Number(value)
+      if (config.medalTasks.light.reserveLikeRoomids.includes(roomid)) {
+        ElMessage.warning({
+          message: '该直播间已在预留列表中',
+          appendTo: '.el-dialog',
+        })
+        return
+      }
+      config.medalTasks.light.reserveLikeRoomids.push(roomid)
+    })
+    .catch(() => {})
+}
+
 const medalInfoPanelVisible = ref<boolean>(false)
 const medalInfoTableData = computed({
   get() {
@@ -221,6 +258,14 @@ watch(
           @click="medalDanmuPanelVisible = !medalDanmuPanelVisible"
           >编辑弹幕
         </el-button>
+        <el-button
+          type="primary"
+          size="small"
+          :icon="Edit"
+          :disabled="!config.medalTasks.light.enabled"
+          @click="reserveLikePanelVisible = !reserveLikePanelVisible"
+          >预留点赞直播间
+        </el-button>
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.light" />
         <TaskStatus :status="status.medalTasks.light" @click="reset.medalTasks.light" />
       </el-space>
@@ -287,6 +332,40 @@ watch(
       </el-table>
       <template #footer>
         <el-button type="primary" @click="handleAddDanmu">新增弹幕</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog
+      v-model="reserveLikePanelVisible"
+      title="编辑预留点赞直播间"
+      :lock-scroll="false"
+      width="40%"
+    >
+      <el-text type="info">每个预留直播间每天固定点赞 360 次，优先于点其他直播间执行。</el-text>
+      <el-table :data="reserveLikeTableData" :max-height="danmuTableMaxHeight">
+        <el-table-column type="index" width="80" />
+        <el-table-column prop="nick_name" label="昵称" />
+        <el-table-column prop="roomid" label="房间号">
+          <template #default="scope">
+            <el-link
+              :href="'https://live.bilibili.com/' + scope.row.roomid + '?visit_id='"
+              rel="noreferrer"
+              type="primary"
+              target="_blank"
+            >
+              {{ scope.row.roomid }}
+            </el-link>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" align="center">
+          <template #default="scope">
+            <el-button text :icon="Delete" type="danger" @click="handleDeleteReserveLike(scope.$index)">
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button type="primary" @click="handleAddReserveLike">新增直播间</el-button>
       </template>
     </el-dialog>
     <el-dialog v-model="medalInfoPanelVisible" title="编辑粉丝勋章名单" :lock-scroll="false">

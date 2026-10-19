@@ -11,6 +11,11 @@ import type { LiveData } from '@/library/bili-api/data'
 class LightTask extends MedalModule {
   config = this.medalTasksConfig.light
 
+  /** 每个预留直播间每日固定点赞次数 */
+  private static readonly RESERVE_LIKE_COUNT = 360
+  /** 预留直播间单次点赞请求的点赞次数 */
+  private static readonly RESERVE_LIKE_CLICK = 30
+
   set status(s: ModuleStatusTypes) {
     useModuleStore().moduleStatus.DailyTasks.LiveTasks.medalTasks.light = s
   }
@@ -134,6 +139,82 @@ class LightTask extends MedalModule {
     return false;
   }
   /**
+   * 预留直播间中今日尚未完成的点赞次数，用于在给普通直播间点赞时保留额度
+   */
+  private getPendingReservedLikes(): number {
+    return this.config.reserveLikeRoomids.reduce((total, roomid) => {
+      const roomLiked = this.config._todayReserveLikes[String(roomid)] ?? 0
+      return total + Math.max(0, LightTask.RESERVE_LIKE_COUNT - roomLiked)
+    }, 0)
+  }
+
+  /**
+   * 为预留直播间点赞，每个直播间每日固定点赞 RESERVE_LIKE_COUNT 次
+   *
+   * @param medals 点赞列表中属于预留直播间的粉丝勋章
+   * @param budget 本次点赞可用的次数上限
+   * @returns 本次点赞次数
+   */
+  private async likeReserved(
+    medals: LiveData.FansMedalPanel.List[],
+    budget: number,
+  ): Promise<number> {
+    if (this.config.reserveLikeRoomids.length === 0) return 0
+
+    const medalByRoomid = new Map(medals.map((medal) => [medal.room_info.room_id, medal]))
+    let liked = 0
+
+    for (const roomid of this.config.reserveLikeRoomids) {
+      if (!this.config.likeEnabled) break
+      if (liked >= budget) {
+        this.logger.warn('今日点赞额度不足，部分预留直播间未能完成预留点赞')
+        break
+      }
+
+      const key = String(roomid)
+      let roomLiked = this.config._todayReserveLikes[key] ?? 0
+      if (roomLiked >= LightTask.RESERVE_LIKE_COUNT) continue
+
+      const medal = medalByRoomid.get(roomid)
+      if (!medal) {
+        this.logger.warn(`预留直播间（${roomid}）未开播或不在点赞列表中，跳过点赞`)
+        continue
+      }
+
+      while (roomLiked < LightTask.RESERVE_LIKE_COUNT && liked < budget) {
+        if (!this.config.likeEnabled) {
+          this.logger.log('点赞开关已关闭，停止点赞任务')
+          break
+        }
+        if ((await this.resolveLiveStatus(roomid)) === 0) {
+          this.logger.warn(`预留直播间（${roomid}）已经下播，跳过点赞`)
+          break
+        }
+
+        const click = Math.min(
+          LightTask.RESERVE_LIKE_CLICK,
+          LightTask.RESERVE_LIKE_COUNT - roomLiked,
+          budget - liked,
+        )
+        await this.like(medal, click)
+        roomLiked += click
+        liked += click
+        this.config._todayReserveLikes[key] = roomLiked
+
+        if (roomLiked < LightTask.RESERVE_LIKE_COUNT) {
+          await sleep(_.random(5e3, 15e3))
+        }
+      }
+
+      if (roomLiked >= LightTask.RESERVE_LIKE_COUNT) {
+        this.logger.log(`预留直播间（${roomid}）今日已点赞 ${roomLiked} 次`)
+      }
+    }
+
+    return liked
+  }
+
+  /**
    * 给正在直播的直播间点赞
    * @param medals
    * @private
@@ -150,6 +231,7 @@ class LightTask extends MedalModule {
     // 从持久化配置中读取今日已点赞次数，跨天自动重置
     if (!isTimestampToday(this.config._lastCompleteTime)) {
       this.config._todayLightLikes = 0
+      this.config._todayReserveLikes = {}
     }
     let totalLikes = this.config._todayLightLikes
 
@@ -160,26 +242,50 @@ class LightTask extends MedalModule {
       return
     }
 
+    // 3. 预留直播间优先点赞，剩余额度再分配给普通直播间
+    const reserveRoomids = this.config.reserveLikeRoomids
+    const reservedMedals = medals.filter((medal) =>
+      reserveRoomids.includes(medal.room_info.room_id),
+    )
+    const normalMedals = medals.filter(
+      (medal) => !reserveRoomids.includes(medal.room_info.room_id),
+    )
+    if (reserveRoomids.length > 0) {
+      this.logger.log(`预留直播间(${reserveRoomids.length}): ${reserveRoomids.join(', ')}`)
+      const likedForReserved = await this.likeReserved(reservedMedals, DAILY_LIKE_LIMIT - totalLikes)
+      totalLikes += likedForReserved
+      this.config._todayLightLikes = totalLikes
+    }
+
+    // 未完成的预留额度需为对应直播间保留，普通直播间只能使用扣除后的上限
+    const pendingReservedLikes = this.getPendingReservedLikes()
+    const normalLikeLimit = Math.max(0, DAILY_LIKE_LIMIT - pendingReservedLikes)
+    if (pendingReservedLikes > 0) {
+      this.logger.log(
+        `预留直播间尚有 ${pendingReservedLikes} 次点赞未完成，普通直播间点赞上限为 ${normalLikeLimit} 次`,
+      )
+    }
+
     // 1. 切割批次
     const batchList = [];
-    for (let i = 0; i < medals.length; i += BATCH_SIZE) {
-      batchList.push(medals.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < normalMedals.length; i += BATCH_SIZE) {
+      batchList.push(normalMedals.slice(i, i + BATCH_SIZE));
     }
 
     // 2. 按批次执行：每批都跑满12轮
     for (const batch of batchList) {
-      if (totalLikes >= DAILY_LIKE_LIMIT || !this.config.likeEnabled) break;
+      if (totalLikes >= normalLikeLimit || !this.config.likeEnabled) break;
       let n = batch.length;
       this.logger.log(`点赞列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
       batch.reverse();
       for (let j = 0; j < 12; j++) {
-        if (totalLikes >= DAILY_LIKE_LIMIT || !this.config.likeEnabled) break;
+        if (totalLikes >= normalLikeLimit || !this.config.likeEnabled) break;
         for (let i = n - 1; i >= 0; i--) {
           if (!this.config.likeEnabled) {
             this.logger.log('点赞开关已关闭，停止点赞任务')
             break
           }
-          if (totalLikes >= DAILY_LIKE_LIMIT) break;
+          if (totalLikes >= normalLikeLimit) break;
           const medal = batch[i];
           let flag = 1;
           const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id);
