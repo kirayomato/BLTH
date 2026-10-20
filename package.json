@@ -10,7 +10,7 @@
     "build-minify": "run-s \"build-only {@}\" minify --",
     "build-standalone": "run-s \"build-web {@}\" \"build-standalone-node {@}\" --",
     "build-web": "vite build --config vite.web.config.ts",
-    "build-standalone-node": "vite build --config vite.standalone.config.ts {@}",
+    "build-standalone-node": "vite build --config vite.standalone.config.ts",
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "run-s type-check-app type-check-standalone",
