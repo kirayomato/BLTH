@@ -13,6 +13,16 @@ const request: Requests = {
   raw: new Request(),
 }
 
+/**
+ * 当前登录用户的 UID。
+ *
+ * BilibiliLive 只存在于直播间页面，独立运行版没有该对象，此时取用户信息中的 mid。
+ */
+const getSelfUid = (): number => {
+  const biliStore = useBiliStore()
+  return biliStore.BilibiliLive?.UID ?? biliStore.userInfo!.mid
+}
+
 const BAPI: BapiMethods = {
   live: {
     fansMedalPanel: (page, page_size = 10) => {
@@ -96,7 +106,7 @@ const BAPI: BapiMethods = {
     likeReport: (room_id, anchor_id, click_time = 1, web_location = '444.8') => {
       const biliStore = useBiliStore()
       const bili_jct = biliStore.cookies!.bili_jct
-      const uid = biliStore.BilibiliLive!.UID
+      const uid = getSelfUid()
       return request.live.post('/xlive/app-ucenter/v1/like_info_v3/like/likeReportV3', null, {
         params: wbiSign({
           click_time,
@@ -403,7 +413,7 @@ const BAPI: BapiMethods = {
       },
       addExperience: () => {
         const biliStore = useBiliStore()
-        const mid = biliStore.BilibiliLive!.UID
+        const mid = getSelfUid()
         const buvid = biliStore.cookies!.buvid3
         const bili_jct = biliStore.cookies!.bili_jct
         return request.main.post(
