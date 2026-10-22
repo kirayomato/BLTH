@@ -277,8 +277,10 @@ export const useModuleStore = defineStore('module', () => {
    */
   ;(function clearStatus() {
     setTimeout(() => {
-      deepestIterate(moduleStatus, (_value: ModuleStatusTypes, path: string) => {
-        _.set(moduleStatus, path, '')
+      // 必须传入 .value：直接传 ref 会遍历到 ref 自身的内部字段（__v_isRef、dep 等），
+      // 把它们覆盖成空字符串会让 isRef 判定失效，store 取值不再解包，之后所有状态写入都会拿到 ref 对象
+      deepestIterate(moduleStatus.value, (_value: ModuleStatusTypes, path: string) => {
+        _.set(moduleStatus.value, path, '')
       })
       // 每天零点重置每日点赞计数
       moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._todayLightLikes = 0
