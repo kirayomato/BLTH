@@ -95,6 +95,7 @@ export const useModuleStore = defineStore('module', () => {
             moduleStatus.value.DailyTasks.LiveTasks.medalTasks.light = ''
             moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._lastCompleteTime = 0
             moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._todayLightLikes = 0
+            moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._lastLikeTime = 0
 
             rerunModule('Default_FansMedals', true)
             rerunModule('DailyTask_LiveTask_LightTask')
@@ -282,8 +283,10 @@ export const useModuleStore = defineStore('module', () => {
       deepestIterate(moduleStatus.value, (_value: ModuleStatusTypes, path: string) => {
         _.set(moduleStatus.value, path, '')
       })
-      // 每天零点重置每日点赞计数
-      moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._todayLightLikes = 0
+      // 每天零点重置每日点赞计数（点赞为手动运行，计数需一并清零）
+      const lightConfig = moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light
+      lightConfig._todayLightLikes = 0
+      lightConfig._lastLikeTime = 0
       clearStatus()
     }, delayToNextMoment(0, 0).ms)
   })()

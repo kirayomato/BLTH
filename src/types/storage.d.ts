@@ -27,14 +27,12 @@ interface ModuleConfig {
           likeEnabled: boolean
           /** 弹幕功能开关 */
           danmuEnabled: boolean
-          /** 点赞预留直播间列表，每个直播间每日固定点赞固定次数 */
-          reserveLikeRoomids: number[]
           danmuList: string[]
           emojiList: string[]
           _lastCompleteTime: number
           _todayLightLikes: number
-          /** 今日各预留直播间已点赞次数，键为直播间号 */
-          _todayReserveLikes: Record<string, number>
+          /** 今日点赞计数所属的时间戳，用于跨天重置；与 _lastCompleteTime（模块每轮运行都会更新）分开 */
+          _lastLikeTime: number
         }
         watch: {
           enabled: boolean

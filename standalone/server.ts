@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import Logger from '@/library/logger'
 import { useModuleStore } from '@/stores'
+import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import { getLogLevel, isLogLevel, options, setLogLevel, type LogLevel } from './config'
 import { runModule } from './runner'
 import { configPageHtml } from './web-page'
@@ -66,7 +67,7 @@ const TASK_ENTRIES: TaskEntry[] = [
     field: 'likeEnabled',
     moduleName: 'DailyTask_LiveTask_LightTask',
     group: '直播任务',
-    label: '点赞',
+    label: '点赞（在下方手动触发）',
     sub: true,
     parent: 'DailyTasks.LiveTasks.medalTasks.light',
   },
@@ -174,6 +175,11 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
   const moduleStore = useModuleStore()
 
   for (const entry of newlyEnabled) {
+    // 点赞已改为手动运行，打开开关只是放行手动入口，不必顺带重跑一轮模块
+    if (entry.field === 'likeEnabled') {
+      continue
+    }
+
     const instance = moduleStore.moduleInstances[entry.moduleName]
     if (!instance || !instance.isEnabled() || instance.nextRunTimer) {
       continue
@@ -183,6 +189,17 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
     void runModule(entry.moduleName, instance)
   }
 }
+
+/** 点赞任务模块名 */
+const LIKE_MODULE_NAME = 'DailyTask_LiveTask_LightTask'
+
+/** 取出点赞任务实例（模块在启动时已实例化，可能因主开关关闭而未启用） */
+function getLightTask(): LightTask | undefined {
+  return useModuleStore().moduleInstances[LIKE_MODULE_NAME] as unknown as LightTask | undefined
+}
+
+/** 是否正在收集点赞列表，避免并发重复请求 */
+let likeCollecting = false
 
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -230,6 +247,77 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 
       applyTasks(Array.isArray(payload.tasks) ? payload.tasks : [])
       sendJson(response, 200, { tasks: listTasks() })
+      return
+    }
+  }
+
+  if (url === '/api/like') {
+    const instance = getLightTask()
+    if (!instance) {
+      sendJson(response, 500, { error: '点赞模块未加载' })
+      return
+    }
+
+    if (request.method === 'GET') {
+      // 多标签页或连点都可能重复触发，收集期间直接拒绝，避免对接口造成双倍请求
+      if (likeCollecting) {
+        sendJson(response, 409, { error: '正在收集点赞列表，请稍后' })
+        return
+      }
+
+      likeCollecting = true
+      try {
+        // 收集候选会逐个探测直播间、查询点赞进度，耗时与房间数成正比
+        const snapshot = await instance.collectLikeCandidates()
+        if (!snapshot) {
+          sendJson(response, 409, { error: '当前无法收集点赞列表，请查看运行日志' })
+          return
+        }
+        sendJson(response, 200, snapshot)
+      } finally {
+        likeCollecting = false
+      }
+      return
+    }
+
+    if (request.method === 'POST') {
+      const body = await readBody(request)
+
+      let payload: { roomids?: unknown }
+      try {
+        payload = JSON.parse(body || '{}')
+      } catch {
+        sendJson(response, 400, { error: '请求体不是合法的 JSON' })
+        return
+      }
+
+      const roomids = Array.isArray(payload.roomids)
+        ? payload.roomids.filter(
+            (roomid): roomid is number =>
+              typeof roomid === 'number' && Number.isInteger(roomid) && roomid > 0,
+          )
+        : []
+
+      if (roomids.length === 0) {
+        sendJson(response, 400, { error: 'roomids 不能为空' })
+        return
+      }
+
+      if (instance.isManualLikeRunning) {
+        sendJson(response, 409, { error: '点赞任务正在运行中' })
+        return
+      }
+
+      // 点赞本身耗时较长，立即返回，进度看运行日志
+      logger.log(`配置页面触发点赞：${roomids.length} 个直播间`)
+      // likeRooms 内部的 IO 异常均已各自捕获，这里再兜一层：
+      // 后台执行的 Promise 若抛出，避免形成未处理的 rejection 搞垮常驻进程
+      instance.likeRooms(roomids).catch((error: unknown) => {
+        logger.error(
+          `配置页面触发点赞出错：${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
+      sendJson(response, 202, { accepted: true })
       return
     }
   }

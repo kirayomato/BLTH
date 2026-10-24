@@ -5,19 +5,43 @@ import { sleep } from '@/library/utils'
 import type { ModuleStatusTypes } from '@/types'
 import _ from 'lodash'
 import MedalModule from '@/modules/dailyTasks/liveTasks/medalTasks/MedalModule'
-import type { LightTaskMedalFilters, MedalsByLivingStatus } from './types'
+import type {
+  LightTaskMedalFilters,
+  LikeCandidateSnapshot,
+  LikeRoomCandidate,
+  MedalsByLivingStatus,
+} from './types'
 import type { LiveData } from '@/library/bili-api/data'
 
 class LightTask extends MedalModule {
   config = this.medalTasksConfig.light
 
-  /** 每个预留直播间每日固定点赞次数 */
-  private static readonly RESERVE_LIKE_COUNT = 360
-  /** 预留直播间单次点赞请求的点赞次数 */
-  private static readonly RESERVE_LIKE_CLICK = 30
+  /** 每日点赞上限 */
+  private static readonly DAILY_LIKE_LIMIT = 5000
+  /** 普通直播间每批处理的个数 */
+  private static readonly LIKE_BATCH_SIZE = 10
+  /** 每个直播间每次点赞的轮数 */
+  private static readonly LIKE_ROUNDS = 12
+  /** 点赞任务标题 */
+  private static readonly LIKE_MISSION_TITLE = '点赞30次'
+
+  /** 手动点赞是否正在执行，避免重复触发 */
+  private manualLikeRunning = false
+  /**
+   * 上一次检查得到的可点赞直播间
+   *
+   * 直播状态与「点赞30次」进度在获取列表时查一次，用于填充选择窗口并做初筛；
+   * 真正点赞时每个房间每一轮都会重新确认，不再依赖这份结果。
+   */
+  private checkedRooms: LikeRoomCandidate[] = []
 
   set status(s: ModuleStatusTypes) {
     useModuleStore().moduleStatus.DailyTasks.LiveTasks.medalTasks.light = s
+  }
+
+  /** 手动点赞是否正在执行 */
+  public get isManualLikeRunning(): boolean {
+    return this.manualLikeRunning
   }
 
   private MEDAL_FILTERS: LightTaskMedalFilters = {
@@ -139,193 +163,269 @@ class LightTask extends MedalModule {
     return false;
   }
   /**
-   * 预留直播间中今日尚未完成的点赞次数，用于在给普通直播间点赞时保留额度
+   * 跨天时重置今日点赞计数
+   *
+   * 用 `_lastLikeTime` 而不是 `_lastCompleteTime` 判断：后者每轮模块运行都会更新，
+   * 手动点赞时几乎总是「今天」，会导致今日计数永不重置。
+   *
+   * @returns 今日已点赞次数
    */
-  private getPendingReservedLikes(): number {
-    return this.config.reserveLikeRoomids.reduce((total, roomid) => {
-      const roomLiked = this.config._todayReserveLikes[String(roomid)] ?? 0
-      return total + Math.max(0, LightTask.RESERVE_LIKE_COUNT - roomLiked)
-    }, 0)
+  private syncDailyLikeState(): number {
+    if (!isTimestampToday(this.config._lastLikeTime ?? 0)) {
+      this.config._todayLightLikes = 0
+      this.config._lastLikeTime = tsm()
+      // 跨天后任务进度重置，之前检查出的房间列表已经过期
+      this.checkedRooms = []
+    }
+
+    return this.config._todayLightLikes
   }
 
   /**
-   * 为预留直播间点赞，每个直播间每日固定点赞 RESERVE_LIKE_COUNT 次
+   * 检查可以点赞的直播间
    *
-   * @param medals 点赞列表中属于预留直播间的粉丝勋章
-   * @param budget 本次点赞可用的次数上限
-   * @returns 本次点赞次数
+   * 直播状态与「点赞30次」进度在这里查一次，结果保存在 checkedRooms 中，
+   * 供选择窗口展示与执行前的初筛；点赞过程中还会逐轮重新确认。
+   *
+   * @returns 可点赞的直播间列表
    */
-  private async likeReserved(
-    medals: LiveData.FansMedalPanel.List[],
-    budget: number,
-  ): Promise<number> {
-    if (this.config.reserveLikeRoomids.length === 0) return 0
+  private async checkLikeRooms(): Promise<LikeRoomCandidate[]> {
+    const medals = this.getMedals().on
+    const candidates: LikeRoomCandidate[] = []
 
-    const medalByRoomid = new Map(medals.map((medal) => [medal.room_info.room_id, medal]))
-    let liked = 0
-
-    for (const roomid of this.config.reserveLikeRoomids) {
-      if (!this.config.likeEnabled) break
-      if (liked >= budget) {
-        this.logger.warn('今日点赞额度不足，部分预留直播间未能完成预留点赞')
+    this.logger.log(`开始检查 ${medals.length} 个直播间是否可以点赞`)
+    for (const medal of medals) {
+      if (!this.config.likeEnabled) {
+        this.logger.log('点赞开关已关闭，停止检查点赞列表')
         break
       }
 
-      const key = String(roomid)
-      let roomLiked = this.config._todayReserveLikes[key] ?? 0
-      if (roomLiked >= LightTask.RESERVE_LIKE_COUNT) continue
+      const roomid = medal.room_info.room_id
+      const nick_name = medal.anchor_info.nick_name
 
-      const medal = medalByRoomid.get(roomid)
-      if (!medal) {
-        this.logger.warn(`预留直播间（${roomid}）未开播或不在点赞列表中，跳过点赞`)
+      const liveStatus = await this.resolveLiveStatus(roomid)
+      if (liveStatus === 0) {
+        this.logger.warn(`${nick_name} 已经下播，跳过点赞`)
         continue
       }
 
-      while (roomLiked < LightTask.RESERVE_LIKE_COUNT && liked < budget) {
-        if (!this.config.likeEnabled) {
-          this.logger.log('点赞开关已关闭，停止点赞任务')
-          break
-        }
-        if ((await this.resolveLiveStatus(roomid)) === 0) {
-          this.logger.warn(`预留直播间（${roomid}）已经下播，跳过点赞`)
-          break
-        }
-
-        const click = Math.min(
-          LightTask.RESERVE_LIKE_CLICK,
-          LightTask.RESERVE_LIKE_COUNT - roomLiked,
-          budget - liked,
+      // 未点亮的勋章不查任务进度：此时点赞是为了重新点亮，不受每日任务上限约束
+      let likeProgress: number | null = null
+      let likeProgressTotal: number | null = null
+      if (medal.medal.is_lighted) {
+        const [prog, total] = await MedalModule.getMissionProgress(
+          medal.medal.target_id,
+          LightTask.LIKE_MISSION_TITLE,
         )
-        await this.like(medal, click)
-        roomLiked += click
-        liked += click
-        this.config._todayReserveLikes[key] = roomLiked
-
-        if (roomLiked < LightTask.RESERVE_LIKE_COUNT) {
-          await sleep(_.random(5e3, 15e3))
+        this.logger.log(`${nick_name} 点赞进度: ${prog} / ${total}`)
+        if (total > 0 && prog >= total) {
+          this.logger.warn(`${nick_name} 点赞任务进度已达到上限，跳过点赞`)
+          continue
         }
+        likeProgress = prog
+        likeProgressTotal = total
       }
 
-      if (roomLiked >= LightTask.RESERVE_LIKE_COUNT) {
-        this.logger.log(`预留直播间（${roomid}）今日已点赞 ${roomLiked} 次`)
-      }
+      candidates.push({
+        roomid,
+        nick_name,
+        medal_name: medal.medal.medal_name,
+        avatar: medal.anchor_info.avatar,
+        medal_level: medal.medal.level,
+        is_lighted: medal.medal.is_lighted === 1,
+        likeProgress,
+        likeProgressTotal,
+      })
     }
 
-    return liked
+    this.checkedRooms = candidates
+    this.logger.log(`共找到 ${candidates.length} 个可以点赞的直播间`)
+    return candidates
   }
 
   /**
-   * 给正在直播的直播间点赞
-   * @param medals
-   * @private
+   * 收集当前可以点赞的直播间
+   *
+   * 检查只做一次：已经检查过的结果会一直复用，窗口反复开关、重复点按钮都不会
+   * 重新探测房间；点赞执行完成后结果被清空，下次再点按钮才会重新检查。
+   *
+   * @returns 候选快照（含今日点赞次数与上限）；前置条件不满足时返回 null
    */
-  private async likeTask(medals: LiveData.FansMedalPanel.List[]) {
-    const BATCH_SIZE = 10;      // 每一批处理多少个
-    const DAILY_LIKE_LIMIT = 5000; // 每日点赞上限
-    const d = new Date();
-    const hours = d.getHours();         // 时
-    if (hours < 2) {
-      this.logger.log(`0-2点自动跳过点赞任务`)
+  public async collectLikeCandidates(): Promise<LikeCandidateSnapshot | null> {
+    if (!this.config.enabled) {
+      this.logger.warn('点亮熄灭勋章开关未开启，无法点赞')
+      return null
+    }
+    if (!this.config.likeEnabled) {
+      this.logger.warn('点赞开关已关闭，无法点赞')
+      return null
+    }
+    if (!(await this.waitForFansMedals())) {
+      this.logger.error('粉丝勋章数据不存在，无法点赞')
+      return null
+    }
+
+    const totalLikes = this.syncDailyLikeState()
+    this.logger.log(`今日已点赞 ${totalLikes} 次（上限 ${LightTask.DAILY_LIKE_LIMIT}）`)
+
+    if (totalLikes >= LightTask.DAILY_LIKE_LIMIT) {
+      this.logger.log('今日点赞已达上限，无法点赞')
+      return null
+    }
+
+    // 检查过就直接复用，不再逐个房间重新探测
+    if (this.checkedRooms.length > 0) {
+      this.logger.log(`${this.checkedRooms.length} 个可以点赞的直播间`)
+      return {
+        candidates: this.checkedRooms,
+        todayLikes: totalLikes,
+        dailyLimit: LightTask.DAILY_LIKE_LIMIT,
+      }
+    }
+
+    const candidates = await this.checkLikeRooms()
+
+    return { candidates, todayLikes: totalLikes, dailyLimit: LightTask.DAILY_LIKE_LIMIT }
+  }
+
+  /**
+   * 为指定直播间点赞
+   *
+   * 控制面板与独立运行版的配置页面都走这条链路（页面负责收集候选并选择房间，
+   * 模块只执行点赞）。
+   *
+   * @param roomids 要执行点赞的直播间号
+   */
+  public async likeRooms(roomids: number[]): Promise<void> {
+    if (this.manualLikeRunning) {
+      this.logger.warn('点赞任务正在运行中，忽略本次触发')
       return
     }
-    // 从持久化配置中读取今日已点赞次数，跨天自动重置
-    if (!isTimestampToday(this.config._lastCompleteTime)) {
-      this.config._todayLightLikes = 0
-      this.config._todayReserveLikes = {}
+
+    this.manualLikeRunning = true
+    try {
+      await this.executeLike(roomids)
+    } finally {
+      this.manualLikeRunning = false
     }
-    let totalLikes = this.config._todayLightLikes
+  }
 
-    this.logger.log(`今日已点赞 ${totalLikes} 次（上限 ${DAILY_LIKE_LIMIT}）`)
+  /**
+   * 为指定直播间执行点赞
+   *
+   * 收集列表时的检查结果只用于初筛；真正点赞时每轮都会重新确认直播状态与
+   * 「点赞30次」进度，已经下播或任务完成的房间会被移出本批。
+   *
+   * @param roomids 要执行点赞的直播间号
+   */
+  private async executeLike(roomids: number[]): Promise<void> {
+    let totalLikes = this.syncDailyLikeState()
 
-    if (totalLikes >= DAILY_LIKE_LIMIT) {
+    this.logger.log(`今日已点赞 ${totalLikes} 次（上限 ${LightTask.DAILY_LIKE_LIMIT}）`)
+
+    if (totalLikes >= LightTask.DAILY_LIKE_LIMIT) {
       this.logger.log('今日点赞已达上限，跳过点赞任务')
       return
     }
-
-    // 3. 预留直播间优先点赞，剩余额度再分配给普通直播间
-    const reserveRoomids = this.config.reserveLikeRoomids
-    const reservedMedals = medals.filter((medal) =>
-      reserveRoomids.includes(medal.room_info.room_id),
-    )
-    const normalMedals = medals.filter(
-      (medal) => !reserveRoomids.includes(medal.room_info.room_id),
-    )
-    if (reserveRoomids.length > 0) {
-      this.logger.log(`预留直播间(${reserveRoomids.length}): ${reserveRoomids.join(', ')}`)
-      const likedForReserved = await this.likeReserved(reservedMedals, DAILY_LIKE_LIMIT - totalLikes)
-      totalLikes += likedForReserved
-      this.config._todayLightLikes = totalLikes
+    if (roomids.length === 0) {
+      this.logger.log('没有选择任何直播间，跳过点赞任务')
+      return
     }
 
-    // 未完成的预留额度需为对应直播间保留，普通直播间只能使用扣除后的上限
-    const pendingReservedLikes = this.getPendingReservedLikes()
-    const normalLikeLimit = Math.max(0, DAILY_LIKE_LIMIT - pendingReservedLikes)
-    if (pendingReservedLikes > 0) {
-      this.logger.log(
-        `预留直播间尚有 ${pendingReservedLikes} 次点赞未完成，普通直播间点赞上限为 ${normalLikeLimit} 次`,
+    if (this.checkedRooms.length === 0) {
+      await this.checkLikeRooms()
+    }
+
+    const checked = new Set(this.checkedRooms.map((room) => room.roomid))
+    const wantedRoomids = roomids.filter((roomid) => checked.has(roomid))
+    if (wantedRoomids.length !== roomids.length) {
+      this.logger.warn(
+        `${roomids.length - wantedRoomids.length} 个直播间未通过检查（已下播或任务已完成），跳过点赞`,
       )
     }
-
-    // 1. 切割批次
-    const batchList = [];
-    for (let i = 0; i < normalMedals.length; i += BATCH_SIZE) {
-      batchList.push(normalMedals.slice(i, i + BATCH_SIZE));
+    if (wantedRoomids.length === 0) {
+      this.logger.log('没有符合条件的直播间，跳过点赞任务')
+      return
     }
 
-    // 2. 按批次执行：每批都跑满12轮
+    const medalByRoomid = new Map(
+      this.getMedals().on.map((medal) => [medal.room_info.room_id, medal]),
+    )
+
+    const medals = wantedRoomids
+      .map((roomid) => medalByRoomid.get(roomid))
+      .filter((medal): medal is LiveData.FansMedalPanel.List => Boolean(medal))
+
+    // 1. 切割批次
+    const batchList: LiveData.FansMedalPanel.List[][] = []
+    for (let i = 0; i < medals.length; i += LightTask.LIKE_BATCH_SIZE) {
+      batchList.push(medals.slice(i, i + LightTask.LIKE_BATCH_SIZE))
+    }
+
+    // 2. 按批次执行：每批都跑满 12 轮，每轮跑之前重新确认房间状态与任务进度
     for (const batch of batchList) {
-      if (totalLikes >= normalLikeLimit || !this.config.likeEnabled) break;
-      let n = batch.length;
-      this.logger.log(`点赞列表(${batch.length}): ${batch.map(medal => medal.anchor_info.nick_name)}`)
-      batch.reverse();
-      for (let j = 0; j < 12; j++) {
-        if (totalLikes >= normalLikeLimit || !this.config.likeEnabled) break;
+      if (totalLikes >= LightTask.DAILY_LIKE_LIMIT || !this.config.likeEnabled) break
+      let n = batch.length
+      this.logger.log(
+        `点赞列表(${batch.length}): ${batch.map((medal) => medal.anchor_info.nick_name)}`,
+      )
+      batch.reverse()
+
+      for (let j = 0; j < LightTask.LIKE_ROUNDS; j++) {
+        if (n === 0) break
+        if (totalLikes >= LightTask.DAILY_LIKE_LIMIT || !this.config.likeEnabled) break
         for (let i = n - 1; i >= 0; i--) {
           if (!this.config.likeEnabled) {
             this.logger.log('点赞开关已关闭，停止点赞任务')
             break
           }
-          if (totalLikes >= normalLikeLimit) break;
-          const medal = batch[i];
-          let flag = 1;
-          const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id);
-          if (liveStatus == 0) {
+          if (totalLikes >= LightTask.DAILY_LIKE_LIMIT) break
+
+          const medal = batch[i]
+          let skip = false
+
+          const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id)
+          if (liveStatus === 0) {
             this.logger.warn(`${medal.anchor_info.nick_name} 已经下播，跳过点赞任务`)
-            flag = 0;
+            skip = true
           }
-          if (medal.medal.is_lighted) {
-            const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "点赞30次")
+
+          if (!skip && medal.medal.is_lighted) {
+            const [prog, total] = await MedalModule.getMissionProgress(
+              medal.medal.target_id,
+              LightTask.LIKE_MISSION_TITLE,
+            )
             this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
-            if (prog == total || j - prog > 2) {
+            // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
+            if (prog === total || j - prog > 2) {
               if (j - prog > 2) {
                 this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
               }
-              flag = 0;
+              skip = true
             }
           }
-          if (flag == 0) {
-            [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
-            n--;
+
+          if (skip) {
+            // 换到批尾并缩小遍历范围，本批后续轮次不再处理该房间
+            ;[batch[i], batch[n - 1]] = [batch[n - 1], batch[i]]
+            n--
             continue
           }
-          const likeCount = _.random(30, 40);
-          await this.like(medal, likeCount);
-          totalLikes += likeCount;
+
+          const likeCount = _.random(30, 40)
+          await this.like(medal, likeCount)
+          totalLikes += likeCount
           this.config._todayLightLikes = totalLikes
 
-          await sleep(_.random(5e3, 15e3));
+          await sleep(_.random(5e3, 15e3))
         }
       }
     }
+
+    // 这一轮点赞改变了任务进度，下次收集需要重新检查
+    this.checkedRooms = []
+
     this.logger.log(`点赞任务已完成，本日总点赞次数: ${totalLikes}`)
-    // 点赞任务完成一次执行后自动关闭开关，避免后续重复执行
-    // 仅在自然跑完且开关仍开启时关闭；若已被用户中途关闭则不重复操作
-    if (medals.length === 0) {
-      this.logger.log('没有正在直播的粉丝勋章，点赞开关保持开启')
-    } else if (this.config.likeEnabled) {
-      this.config.likeEnabled = false
-      this.logger.log('点赞任务已完成一次执行，点赞开关已自动关闭')
-    }
   }
 
   /**
@@ -416,7 +516,11 @@ class LightTask extends MedalModule {
 
     const tasks: Promise<void>[] = []
     if (this.config.likeEnabled) {
-      tasks.push(this.likeTask(fansMedals.on))
+      // 点赞改为手动运行，但候选直播间在这里（初始化时）就查好：
+      // 面板点【选择直播间点赞】直接展示结果，不用现查一遍
+      this.syncDailyLikeState()
+      tasks.push(this.checkLikeRooms().then(() => undefined))
+
     } else {
       this.logger.log('点赞功能已关闭，跳过点赞任务')
     }

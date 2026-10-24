@@ -38,6 +38,9 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs   # 仅检查登录态，�
 启动后访问 `http://127.0.0.1:8787` 打开配置页面，可以开关各项任务，也能在下拉框里调整日志等级
 （debug / info / warn / error / 关闭），改动即时生效并落盘；任务参数（投币数量、
 观看时长、弹幕列表、房间名单）仍需直接编辑 `data/storage.json`。页面只监听回环地址。
+点赞任务改为手动运行：模块运行（含打开点赞开关、手动重跑）时会先查好可点赞的直播间，
+页面点【获取可点赞直播间】/【选择直播间点赞】直接展示这份结果，不再现查；
+点赞执行完成或跨天后清空，执行时仍按原来的逻辑逐个房间、逐轮重新确认。
 
 构建分两步：`vite.web.config.ts` 先构建 `standalone/web` 得到内联了全部脚本与样式的单个 HTML
 （`dist-web/`），`vite.standalone.config.ts` 再把该 HTML 嵌进可执行文件。两者由

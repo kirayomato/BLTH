@@ -41,7 +41,6 @@ const defaultValues: DefaultValues = {
             enabled: false,
             likeEnabled: true,
             danmuEnabled: true,
-            reserveLikeRoomids: [],
             danmuList: [
               '(⌒▽⌒)',
               '（￣▽￣）',
@@ -101,7 +100,8 @@ const defaultValues: DefaultValues = {
             ],
             _lastCompleteTime: 0,
             _todayLightLikes: 0,
-            _todayReserveLikes: {},
+            // 取当前时间而不是 0：老配置补上该字段时不会被视为跨天，避免把当天已点赞次数清零后重复点赞
+            _lastLikeTime: Date.now(),
           },
           watch: {
             enabled: false,
