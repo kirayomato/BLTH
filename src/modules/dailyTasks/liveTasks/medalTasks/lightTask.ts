@@ -390,14 +390,14 @@ class LightTask extends MedalModule {
             skip = true
           }
 
-          if (!skip && medal.medal.is_lighted) {
+          if (!skip) {
             const [prog, total] = await MedalModule.getMissionProgress(
               medal.medal.target_id,
               LightTask.LIKE_MISSION_TITLE,
             )
             this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
             // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
-            if (prog === total || j - prog > 2) {
+            if ((total > 0 && prog === total) || j - prog > 2) {
               if (j - prog > 2) {
                 this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
               }
@@ -469,13 +469,12 @@ class LightTask extends MedalModule {
             this.logger.warn(`${medal.anchor_info.nick_name} 检测到直播中，跳过发送弹幕任务`)
             flag = 0;
           }
-          if (medal.medal.is_lighted) {
-            const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "发弹幕")
-            this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
-            if (prog == total) {
-              flag = 0
-            }
+          const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "发弹幕")
+          this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
+          if (total > 0 && prog == total) {
+            flag = 0
           }
+
           if (flag == 0) {
             [batch[i], batch[n - 1]] = [batch[n - 1], batch[i]];
             n--;
