@@ -219,7 +219,7 @@ class LightTask extends MedalModule {
         )
         this.logger.log(`${nick_name} 点赞进度: ${prog} / ${total}`)
         if (total > 0 && prog >= total) {
-          this.logger.warn(`${nick_name} 点赞任务进度已达到上限，跳过点赞`)
+          this.logger.log(`${nick_name} 点赞任务进度已达到上限，跳过点赞`)
           continue
         }
         likeProgress = prog
