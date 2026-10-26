@@ -9,6 +9,7 @@ import type {
   LightTaskMedalFilters,
   LikeCandidateSnapshot,
   LikeRoomCandidate,
+  MedalMissionState,
   MedalsByLivingStatus,
 } from './types'
 import type { LiveData } from '@/library/bili-api/data'
@@ -204,6 +205,44 @@ class LightTask extends MedalModule {
   }
 
   /**
+   * 获取任务进度，并顺便刷新点亮状态
+   *
+   * 进度与点亮状态来自同一次 `GetActivatedMedalInfo` 请求：
+   * 拿到响应后立刻把 `is_lighted` 写回勋章快照，再解析任务进度，
+   * 不会为了更新点亮状态额外发请求。所有需要判断进度的调用点都走这里。
+   *
+   * @param medal 粉丝勋章
+   * @param title 任务标题
+   * @returns 任务状态；请求失败时 `available` 为 false，进度为 0
+   */
+  private async fetchMissionState(
+    medal: LiveData.FansMedalPanel.List,
+    title: string,
+  ): Promise<MedalMissionState> {
+    const summary = await MedalModule.getActivatedMedalSummary(medal.medal.target_id)
+    if (!summary) {
+      // 请求失败时点亮状态只能沿用快照，进度视为不可用
+      return {
+        available: false,
+        isLighted: medal.medal.is_lighted === 1,
+        reachFreeIntimacyLimit: false,
+        prog: 0,
+        total: 0,
+      }
+    }
+
+    const isLighted = this.syncLightState(medal, summary.isLighted)
+    const [prog, total] = MedalModule.parseMissionProgress(summary.tasks, title)
+    return {
+      available: true,
+      isLighted,
+      reachFreeIntimacyLimit: summary.reachFreeIntimacyLimit,
+      prog,
+      total,
+    }
+  }
+
+  /**
    * 检查可以点赞的直播间
    *
    * 直播状态与「点赞30次」进度在这里查一次，结果保存在 checkedRooms 中，
@@ -231,41 +270,34 @@ class LightTask extends MedalModule {
         continue
       }
 
-      // 先刷新点亮状态：快照可能已过期，未点亮 → 已点亮后才会受每日上限约束
-      const summary = await MedalModule.getActivatedMedalSummary(medal.medal.target_id)
-      const isLighted = summary
-        ? this.syncLightState(medal, summary.isLighted)
-        : medal.medal.is_lighted === 1
-
-      // 未点亮的勋章不判断任务上限：此时点赞是为了重新点亮，不受每日任务上限约束
+      // 每个房间都请求：未点亮也要查，点亮状态会在运行中被点亮或熄灭，快照不可靠。
+      // 一次请求同时刷新点亮状态与进度，不额外发请求
+      const state = await this.fetchMissionState(medal, LightTask.LIKE_MISSION_TITLE)
+      const isLighted = state.isLighted
       let likeProgress: number | null = null
       let likeProgressTotal: number | null = null
       if (isLighted) {
-        // 已点亮必须有任务信息才能判断上限，查询失败时保守跳过
-        if (!summary) {
+        // 已点亮必须能判断上限：请求失败 / 解析失败 / 储蓄满 一律保守跳过，别白烧额度
+        if (!state.available) {
           this.logger.warn(`${nick_name} 勋章信息获取失败，跳过点赞`)
           continue
         }
-        if (summary.reachFreeIntimacyLimit) {
+        if (state.reachFreeIntimacyLimit) {
           this.logger.warn(`${nick_name} 亲密度储蓄已满，无法继续做任务，跳过点赞`)
           continue
         }
-        const [prog, total] = MedalModule.parseMissionProgress(
-          summary.tasks,
-          LightTask.LIKE_MISSION_TITLE,
-        )
         // 任务标题缺失或进度格式变更时同样无法判断上限，保守跳过
-        if (total == 0) {
+        if (state.total == 0) {
           this.logger.warn(`${nick_name} 点赞任务信息不可用，跳过点赞`)
           continue
         }
-        this.logger.log(`${nick_name} 点赞进度: ${prog} / ${total}`)
-        if (prog >= total) {
+        this.logger.log(`${nick_name} 点赞进度: ${state.prog} / ${state.total}`)
+        if (state.prog >= state.total) {
           this.logger.log(`${nick_name} 点赞任务进度已达到上限，跳过点赞`)
           continue
         }
-        likeProgress = prog
-        likeProgressTotal = total
+        likeProgress = state.prog
+        likeProgressTotal = state.total
       }
 
       candidates.push({
@@ -433,38 +465,32 @@ class LightTask extends MedalModule {
           }
 
           if (!skip) {
-            // 每轮重新取点亮状态与任务进度：点亮状态可能在点赞过程中变化
-            const summary = await MedalModule.getActivatedMedalSummary(medal.medal.target_id)
-            const isLighted = summary
-              ? this.syncLightState(medal, summary.isLighted)
-              : medal.medal.is_lighted === 1
+            // 每轮都请求：未点亮也要查，点赞过程中房间可能已被点亮，要继续就该受上限约束。
+            // 已点亮时只要信息不可用（请求失败 / 解析失败 / 储蓄满）就跳过，别白烧额度
+            const state = await this.fetchMissionState(medal, LightTask.LIKE_MISSION_TITLE)
 
-            if (isLighted) {
-              if (!summary) {
+            if (state.isLighted) {
+              if (!state.available) {
                 this.logger.warn(`${medal.anchor_info.nick_name} 勋章信息获取失败，跳过点赞任务`)
                 skip = true
-              } else if (summary.reachFreeIntimacyLimit) {
+              } else if (state.reachFreeIntimacyLimit) {
                 this.logger.warn(
                   `${medal.anchor_info.nick_name} 亲密度储蓄已满，无法继续做任务，跳过点赞任务`,
                 )
                 skip = true
+              } else if (state.total == 0) {
+                this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务信息不可用，跳过点赞任务`)
+                skip = true
               } else {
-                const [prog, total] = MedalModule.parseMissionProgress(
-                  summary.tasks,
-                  LightTask.LIKE_MISSION_TITLE,
+                this.logger.log(
+                  `${medal.anchor_info.nick_name} 点赞进度: ${state.prog} / ${state.total}`,
                 )
-                if (total == 0) {
-                  this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务信息不可用，跳过点赞任务`)
-                  skip = true
-                } else {
-                  this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
-                  // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
-                  if (prog >= total || j - prog > 2) {
-                    if (j - prog > 2) {
-                      this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
-                    }
-                    skip = true
+                // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
+                if (state.prog >= state.total || j - state.prog > 2) {
+                  if (j - state.prog > 2) {
+                    this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
                   }
+                  skip = true
                 }
               }
             }
@@ -535,22 +561,34 @@ class LightTask extends MedalModule {
             this.logger.warn(`${medal.anchor_info.nick_name} 检测到直播中，跳过发送弹幕任务`)
             flag = 0;
           }
-          // 用接口刷新点亮状态：面板快照可能过期，熄灭后需要靠弹幕重新点亮
+          // 未点亮也要请求：顺便刷新点亮状态，只有真的已点亮才需要判断上限
           if (flag !== 0) {
-            const summary = await MedalModule.getActivatedMedalSummary(medal.medal.target_id)
-            const isLighted = summary
-              ? this.syncLightState(medal, summary.isLighted)
-              : medal.medal.is_lighted === 1
-
-            // 未点亮时查不到任务进度，发弹幕本身就是为了重新点亮，无需判断上限；
-            // 已点亮时仅在明确查满（total > 0 且进度达上限）才跳过，查询失败不影响发送
-            if (isLighted && summary) {
-              const [prog, total] = MedalModule.parseMissionProgress(summary.tasks, '发弹幕')
-              this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
-              if (total > 0 && prog >= total) {
+            const state = await this.fetchMissionState(medal, '发弹幕')
+            if (state.isLighted) {
+              // 已点亮：请求失败 / 解析失败 / 储蓄满 / 已跑满 都跳过
+              if (!state.available) {
+                this.logger.warn(`${medal.anchor_info.nick_name} 勋章信息获取失败，跳过发送弹幕`)
                 flag = 0
+              } else if (state.reachFreeIntimacyLimit) {
+                this.logger.warn(
+                  `${medal.anchor_info.nick_name} 亲密度储蓄已满，无法继续做任务，跳过发送弹幕`,
+                )
+                flag = 0
+              } else if (state.total == 0) {
+                this.logger.warn(
+                  `${medal.anchor_info.nick_name} 发弹幕任务信息不可用，跳过发送弹幕`,
+                )
+                flag = 0
+              } else {
+                this.logger.log(
+                  `${medal.anchor_info.nick_name} 发弹幕进度: ${state.prog} / ${state.total}`,
+                )
+                if (state.prog >= state.total) {
+                  flag = 0
+                }
               }
             }
+            // 未点亮时无需判断上限：发弹幕本身就是为重新点亮
           }
 
           if (flag == 0) {

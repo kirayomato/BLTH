@@ -63,6 +63,24 @@ interface ActivatedMedalSummary {
   tasks: LiveData.TaskItem[]
 }
 
+/**
+ * 一次 `GetActivatedMedalInfo` 请求得到的任务状态
+ *
+ * 进度与点亮状态来自同一个响应，刷新点亮状态不需要额外请求。
+ */
+interface MedalMissionState {
+  /** 请求是否成功 */
+  available: boolean
+  /** 是否已点亮（已同步回勋章快照） */
+  isLighted: boolean
+  /** 亲密度储蓄是否已满（满了无法继续做任务） */
+  reachFreeIntimacyLimit: boolean
+  /** 任务当前进度 */
+  prog: number
+  /** 任务进度上限；0 表示任务信息不可用 */
+  total: number
+}
+
 export {
   PublicMedalFilters,
   LightTaskMedalFilters,
@@ -72,4 +90,5 @@ export {
   LikeRoomCandidate,
   LikeCandidateSnapshot,
   ActivatedMedalSummary,
+  MedalMissionState,
 }
