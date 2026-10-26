@@ -31,9 +31,9 @@ interface LikeRoomCandidate {
   medal_level: number
   /** 粉丝勋章是否已点亮 */
   is_lighted: boolean
-  /** 「点赞30次」任务当前进度；未点亮或查询失败时为 null */
+  /** 「点赞30次」任务当前进度；未点亮时为 null（任务信息不可用的直播间不会进候选） */
   likeProgress: number | null
-  /** 「点赞30次」任务进度上限；未点亮或查询失败时为 null */
+  /** 「点赞30次」任务进度上限；未点亮时为 null（任务信息不可用的直播间不会进候选） */
   likeProgressTotal: number | null
 }
 
@@ -47,6 +47,22 @@ interface LikeCandidateSnapshot {
   dailyLimit: number
 }
 
+/**
+ * `GetActivatedMedalInfo` 的摘要信息
+ *
+ * 粉丝勋章面板（fansMedals）是启动时的快照，点亮状态会随实时交互变化：
+ * 未点亮 → 已点亮后开始受每日上限约束，已点亮 → 熄灭后需要重新点亮。
+ * 该接口一次请求同时给出点亮状态与任务列表，用于刷新快照并按最新状态分支。
+ */
+interface ActivatedMedalSummary {
+  /** 是否已点亮 */
+  isLighted: boolean
+  /** 亲密度储蓄是否已满（满了无法继续做任务） */
+  reachFreeIntimacyLimit: boolean
+  /** 任务列表；接口未返回时为空数组 */
+  tasks: LiveData.TaskItem[]
+}
+
 export {
   PublicMedalFilters,
   LightTaskMedalFilters,
@@ -55,4 +71,5 @@ export {
   RequestQueueKey,
   LikeRoomCandidate,
   LikeCandidateSnapshot,
+  ActivatedMedalSummary,
 }

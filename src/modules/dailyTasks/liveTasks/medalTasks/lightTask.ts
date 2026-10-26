@@ -217,8 +217,14 @@ class LightTask extends MedalModule {
           medal.medal.target_id,
           LightTask.LIKE_MISSION_TITLE,
         )
+        // 任务信息不可用（请求失败 / 亲密度储蓄已满 / 任务标题或格式变更）时保守跳过：
+        // 此时既无法判断是否已满，也无法靠点赞推进进度
+        if (total == 0) {
+          this.logger.warn(`${nick_name} 点赞任务信息不可用，跳过点赞`)
+          continue
+        }
         this.logger.log(`${nick_name} 点赞进度: ${prog} / ${total}`)
-        if (total > 0 && prog >= total) {
+        if (prog >= total) {
           this.logger.log(`${nick_name} 点赞任务进度已达到上限，跳过点赞`)
           continue
         }
@@ -395,13 +401,22 @@ class LightTask extends MedalModule {
               medal.medal.target_id,
               LightTask.LIKE_MISSION_TITLE,
             )
-            this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
-            // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
-            if ((total > 0 && prog === total) || j - prog > 2) {
-              if (j - prog > 2) {
-                this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
+            if (total == 0) {
+              // 未点亮时查不到进度属正常，点赞本身就是为重新点亮，照常执行；
+              // 已点亮却查不到任务信息说明接口异常或亲密度储蓄已满，保守跳过
+              if (medal.medal.is_lighted) {
+                this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务信息不可用，跳过点赞任务`)
+                skip = true
               }
-              skip = true
+            } else {
+              this.logger.log(`${medal.anchor_info.nick_name} 点赞进度: ${prog} / ${total}`)
+              // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
+              if (prog >= total || j - prog > 2) {
+                if (j - prog > 2) {
+                  this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
+                }
+                skip = true
+              }
             }
           }
 
@@ -469,10 +484,17 @@ class LightTask extends MedalModule {
             this.logger.warn(`${medal.anchor_info.nick_name} 检测到直播中，跳过发送弹幕任务`)
             flag = 0;
           }
-          const [prog, total] = await MedalModule.getMissionProgress(medal.medal.target_id, "发弹幕")
-          this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
-          if (total > 0 && prog == total) {
-            flag = 0
+          // 未点亮的勋章查不到任务进度，发弹幕本身就是为了重新点亮，无需判断上限；
+          // 已点亮时仅在明确查满（total > 0 且进度达上限）才跳过，查询失败不影响发送
+          if (medal.medal.is_lighted) {
+            const [prog, total] = await MedalModule.getMissionProgress(
+              medal.medal.target_id,
+              '发弹幕',
+            )
+            this.logger.log(`${medal.anchor_info.nick_name} 发弹幕进度: ${prog} / ${total}`)
+            if (total > 0 && prog >= total) {
+              flag = 0
+            }
           }
 
           if (flag == 0) {
