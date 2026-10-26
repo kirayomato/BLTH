@@ -257,7 +257,7 @@ async function runLike(): Promise<void> {
       <div class="row">
         <el-button :loading="likeLoading" @click="loadLikeCandidates">获取可点赞直播间</el-button>
         <span v-if="dailyLimit > 0" class="label">
-          今日已点赞 {{ todayLikes }} 次（上限 {{ dailyLimit }}）
+          今日已点亮勋章点赞 {{ todayLikes }} 次（上限 {{ dailyLimit }}，未点亮勋章的点赞不计数）
         </span>
       </div>
 

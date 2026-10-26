@@ -458,8 +458,8 @@ watch(
       width="62%"
     >
       <el-text v-if="isLikeMode" type="info" class="like-summary">
-        共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点赞 {{ likeTodayLikes }} 次（上限
-        {{ likeDailyLimit }}）。勾选后点击【开始点赞】，关闭窗口视为取消。
+        共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（上限
+        {{ likeDailyLimit }}，未点亮勋章的点赞不计数、不受限）。勾选后点击【开始点赞】，关闭窗口视为取消。
       </el-text>
       <VueDraggable
         v-model="medalTableData"

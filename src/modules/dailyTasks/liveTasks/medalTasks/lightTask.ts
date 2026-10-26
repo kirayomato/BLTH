@@ -17,7 +17,7 @@ import type { LiveData } from '@/library/bili-api/data'
 class LightTask extends MedalModule {
   config = this.medalTasksConfig.light
 
-  /** 每日点赞上限 */
+  /** 每日点赞上限（只统计已点亮的勋章；给未点亮勋章的点赞不计数、不受此上限约束） */
   private static readonly DAILY_LIKE_LIMIT = 5000
   /** 普通直播间每批处理的个数 */
   private static readonly LIKE_BATCH_SIZE = 10
@@ -183,6 +183,18 @@ class LightTask extends MedalModule {
   }
 
   /**
+   * 今日点赞是否已达上限
+   *
+   * 上限只统计「已点亮」勋章的点赞：给未点亮的勋章点赞是为了把它点亮，
+   * 这部分点赞不计数，也不受上限约束。
+   *
+   * @param totalLikes 今日已计数的点赞次数
+   */
+  private isLikeLimitReached(totalLikes: number): boolean {
+    return totalLikes >= LightTask.DAILY_LIKE_LIMIT
+  }
+
+  /**
    * 用接口返回的点亮状态刷新勋章快照
    *
    * fansMedals 是启动时的快照，运行中勋章可能被点亮（此后受每日上限约束）
@@ -323,6 +335,9 @@ class LightTask extends MedalModule {
    * 检查只做一次：已经检查过的结果会一直复用，窗口反复开关、重复点按钮都不会
    * 重新探测房间；点赞执行完成后结果被清空，下次再点按钮才会重新检查。
    *
+   * 今日点赞达上限时不会直接拦下整个流程——上限只统计已点亮的勋章，
+   * 未点亮勋章的点赞不计数也不受限，因此此时只把已点亮的直播间从候选中剔除。
+   *
    * @returns 候选快照（含今日点赞次数与上限）；前置条件不满足时返回 null
    */
   public async collectLikeCandidates(): Promise<LikeCandidateSnapshot | null> {
@@ -340,26 +355,32 @@ class LightTask extends MedalModule {
     }
 
     const totalLikes = this.syncDailyLikeState()
-    this.logger.log(`今日已点赞 ${totalLikes} 次（上限 ${LightTask.DAILY_LIKE_LIMIT}）`)
+    this.logger.log(
+      `今日已点亮勋章点赞 ${totalLikes} 次（上限 ${LightTask.DAILY_LIKE_LIMIT}，未点亮勋章的点赞不计数）`,
+    )
 
-    if (totalLikes >= LightTask.DAILY_LIKE_LIMIT) {
-      this.logger.log('今日点赞已达上限，无法点赞')
-      return null
+    if (this.isLikeLimitReached(totalLikes)) {
+      // 达上限后仍然可以给未点亮的勋章点赞：这部分不计数、不受限
+      this.logger.log('已点亮勋章的今日点赞已达上限，本次只给未点亮的勋章点赞')
     }
 
     // 检查过就直接复用，不再逐个房间重新探测
+    const candidates =
+      this.checkedRooms.length > 0 ? this.checkedRooms : await this.checkLikeRooms()
     if (this.checkedRooms.length > 0) {
       this.logger.log(`${this.checkedRooms.length} 个可以点赞的直播间`)
-      return {
-        candidates: this.checkedRooms,
-        todayLikes: totalLikes,
-        dailyLimit: LightTask.DAILY_LIKE_LIMIT,
-      }
     }
 
-    const candidates = await this.checkLikeRooms()
+    // 上限只约束已点亮的勋章：达上限后把已点亮的直播间从候选里剔掉，只留下未点亮的
+    const availableCandidates = this.isLikeLimitReached(totalLikes)
+      ? candidates.filter((room) => !room.is_lighted)
+      : candidates
 
-    return { candidates, todayLikes: totalLikes, dailyLimit: LightTask.DAILY_LIKE_LIMIT }
+    return {
+      candidates: availableCandidates,
+      todayLikes: totalLikes,
+      dailyLimit: LightTask.DAILY_LIKE_LIMIT,
+    }
   }
 
   /**
@@ -390,16 +411,21 @@ class LightTask extends MedalModule {
    * 收集列表时的检查结果只用于初筛；真正点赞时每轮都会重新确认直播状态与
    * 「点赞30次」进度，已经下播或任务完成的房间会被移出本批。
    *
+   * 每日上限只统计已点亮勋章的点赞：未点亮勋章的点赞不计数、不受上限约束，
+   * 因此达上限后仍然继续给未点亮的勋章点赞，只是跳过已点亮的勋章。
+   *
    * @param roomids 要执行点赞的直播间号
    */
   private async executeLike(roomids: number[]): Promise<void> {
     let totalLikes = this.syncDailyLikeState()
 
-    this.logger.log(`今日已点赞 ${totalLikes} 次（上限 ${LightTask.DAILY_LIKE_LIMIT}）`)
+    this.logger.log(
+      `今日已点亮勋章点赞 ${totalLikes} 次（上限 ${LightTask.DAILY_LIKE_LIMIT}，未点亮勋章的点赞不计数）`,
+    )
 
-    if (totalLikes >= LightTask.DAILY_LIKE_LIMIT) {
-      this.logger.log('今日点赞已达上限，跳过点赞任务')
-      return
+    if (this.isLikeLimitReached(totalLikes)) {
+      // 不直接退出：未点亮的勋章仍可继续点赞（这部分不计数、不受限）
+      this.logger.log('已点亮勋章的今日点赞已达上限，本次只给未点亮的勋章点赞')
     }
     if (roomids.length === 0) {
       this.logger.log('没有选择任何直播间，跳过点赞任务')
@@ -438,7 +464,7 @@ class LightTask extends MedalModule {
 
     // 2. 按批次执行：每批都跑满 12 轮，每轮跑之前重新确认房间状态与任务进度
     for (const batch of batchList) {
-      if (totalLikes >= LightTask.DAILY_LIKE_LIMIT || !this.config.likeEnabled) break
+      if (!this.config.likeEnabled) break
       let n = batch.length
       this.logger.log(
         `点赞列表(${batch.length}): ${batch.map((medal) => medal.anchor_info.nick_name)}`,
@@ -447,16 +473,17 @@ class LightTask extends MedalModule {
 
       for (let j = 0; j < LightTask.LIKE_ROUNDS; j++) {
         if (n === 0) break
-        if (totalLikes >= LightTask.DAILY_LIKE_LIMIT || !this.config.likeEnabled) break
+        if (!this.config.likeEnabled) break
         for (let i = n - 1; i >= 0; i--) {
           if (!this.config.likeEnabled) {
             this.logger.log('点赞开关已关闭，停止点赞任务')
             break
           }
-          if (totalLikes >= LightTask.DAILY_LIKE_LIMIT) break
 
           const medal = batch[i]
           let skip = false
+          /** 本次点赞是否计入今日上限：只有已点亮的勋章才计数 */
+          let countLike = medal.medal.is_lighted === 1
 
           const liveStatus = await this.resolveLiveStatus(medal.room_info.room_id)
           if (liveStatus === 0) {
@@ -468,9 +495,16 @@ class LightTask extends MedalModule {
             // 每轮都请求：未点亮也要查，点赞过程中房间可能已被点亮，要继续就该受上限约束。
             // 已点亮时只要信息不可用（请求失败 / 解析失败 / 储蓄满）就跳过，别白烧额度
             const state = await this.fetchMissionState(medal, LightTask.LIKE_MISSION_TITLE)
+            countLike = state.isLighted
 
             if (state.isLighted) {
-              if (!state.available) {
+              if (this.isLikeLimitReached(totalLikes)) {
+                // 已达上限：只跳过已点亮的勋章，未点亮的点赞不计数也不受上限约束
+                this.logger.log(
+                  `${medal.anchor_info.nick_name} 已点亮且今日点赞已达上限，跳过点赞任务`,
+                )
+                skip = true
+              } else if (!state.available) {
                 this.logger.warn(`${medal.anchor_info.nick_name} 勋章信息获取失败，跳过点赞任务`)
                 skip = true
               } else if (state.reachFreeIntimacyLimit) {
@@ -491,7 +525,7 @@ class LightTask extends MedalModule {
                 }
               }
             }
-            // 未点亮时无需判断上限：点赞本身就是为重新点亮，照常执行
+            // 未点亮时无需判断上限：点赞本身就是为重新点亮，照常执行且不计数
           }
 
           if (skip) {
@@ -503,8 +537,16 @@ class LightTask extends MedalModule {
 
           const likeCount = _.random(30, 40)
           await this.like(medal, likeCount)
-          totalLikes += likeCount
-          this.config._todayLightLikes = totalLikes
+
+          if (countLike) {
+            totalLikes += likeCount
+            this.config._todayLightLikes = totalLikes
+          } else {
+            // 未点亮勋章的点赞不计数：既不占用今日上限，也不受上限约束
+            this.logger.debug(
+              `${medal.anchor_info.nick_name} 勋章未点亮，本次点赞 ${likeCount} 次不计入今日上限`,
+            )
+          }
 
           await sleep(_.random(5e3, 15e3))
         }
@@ -514,7 +556,7 @@ class LightTask extends MedalModule {
     // 这一轮点赞改变了任务进度，下次收集需要重新检查
     this.checkedRooms = []
 
-    this.logger.log(`点赞任务已完成，本日总点赞次数: ${totalLikes}`)
+    this.logger.log(`点赞任务已完成，今日已点亮勋章点赞 ${totalLikes} 次`)
   }
 
   /**
