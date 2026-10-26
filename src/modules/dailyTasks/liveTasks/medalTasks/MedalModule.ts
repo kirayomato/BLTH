@@ -86,7 +86,7 @@ class MedalModule extends BaseModule {
       // 需主动触发一次强制获取，否则该 Promise 永远无法结算
       if (fansMedalsStatus.value === undefined) {
         try {
-          Promise.resolve(useModuleStore().rerunModule('Default_FansMedals', true)).catch(() => {})
+          Promise.resolve(useModuleStore().rerunModule('Default_FansMedals', true)).catch(() => { })
         } catch {
           // 模块实例不存在，按获取失败处理，交由调用方决定是否继续
           unwatch()
@@ -304,14 +304,16 @@ class MedalModule extends BaseModule {
       const response = await BAPI.live.getActivatedMedalInfo(targetId)
       if (response.code !== 0) {
         // 未点亮的勋章可能直接返回非 0，调用频次高，这里只留 debug 级别日志
-        console.debug(`BAPI.live.getActivatedMedalInfo(${targetId}) 失败`, response.message)
+        console.error(`BAPI.live.getActivatedMedalInfo(${targetId}) 失败`, response.message)
         return null
       }
+      console.debug('BAPI.live.getActivatedMedalInfo response', response)
       const data = response.data
       if (!data) {
         return null
       }
-      if (data.reach_free_intimacy_limit) {
+      const isLighted = Boolean(data.is_lighted)
+      if (isLighted && data.reach_free_intimacy_limit) {
         console.warn(
           `${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`,
         )
@@ -319,7 +321,7 @@ class MedalModule extends BaseModule {
         console.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`)
       }
       return {
-        isLighted: Boolean(data.is_lighted),
+        isLighted: isLighted,
         reachFreeIntimacyLimit: Boolean(data.reach_free_intimacy_limit),
         tasks: data.task_info ?? [],
       }

@@ -272,10 +272,11 @@ class LightTask extends MedalModule {
 
       // 每个房间都请求：未点亮也要查，点亮状态会在运行中被点亮或熄灭，快照不可靠。
       // 一次请求同时刷新点亮状态与进度，不额外发请求
-      const state = await this.fetchMissionState(medal, LightTask.LIKE_MISSION_TITLE)
-      const isLighted = state.isLighted
+      let isLighted = medal.medal.is_lighted === 1
       let likeProgress: number | null = null
       let likeProgressTotal: number | null = null
+      const state = await this.fetchMissionState(medal, LightTask.LIKE_MISSION_TITLE)
+      isLighted = state.isLighted
       if (isLighted) {
         // 已点亮必须能判断上限：请求失败 / 解析失败 / 储蓄满 一律保守跳过，别白烧额度
         if (!state.available) {
@@ -283,7 +284,6 @@ class LightTask extends MedalModule {
           continue
         }
         if (state.reachFreeIntimacyLimit) {
-          this.logger.warn(`${nick_name} 亲密度储蓄已满，无法继续做任务，跳过点赞`)
           continue
         }
         // 任务标题缺失或进度格式变更时同样无法判断上限，保守跳过
@@ -474,9 +474,6 @@ class LightTask extends MedalModule {
                 this.logger.warn(`${medal.anchor_info.nick_name} 勋章信息获取失败，跳过点赞任务`)
                 skip = true
               } else if (state.reachFreeIntimacyLimit) {
-                this.logger.warn(
-                  `${medal.anchor_info.nick_name} 亲密度储蓄已满，无法继续做任务，跳过点赞任务`,
-                )
                 skip = true
               } else if (state.total == 0) {
                 this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务信息不可用，跳过点赞任务`)
@@ -570,9 +567,6 @@ class LightTask extends MedalModule {
                 this.logger.warn(`${medal.anchor_info.nick_name} 勋章信息获取失败，跳过发送弹幕`)
                 flag = 0
               } else if (state.reachFreeIntimacyLimit) {
-                this.logger.warn(
-                  `${medal.anchor_info.nick_name} 亲密度储蓄已满，无法继续做任务，跳过发送弹幕`,
-                )
                 flag = 0
               } else if (state.total == 0) {
                 this.logger.warn(
