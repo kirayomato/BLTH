@@ -2,7 +2,12 @@ import BaseModule from '@/modules/BaseModule'
 import { storeToRefs } from 'pinia'
 import { useBiliStore, useModuleStore } from '@/stores'
 import { watch } from 'vue'
-import type { PublicMedalFilters, LiveStatusSnapshot, RequestQueueKey } from './types'
+import type {
+  PublicMedalFilters,
+  LiveStatusSnapshot,
+  RequestQueueKey,
+  ActivatedMedalSummary,
+} from './types'
 import { arrayToMap, sleep } from '@/library/utils'
 import type { LiveData } from '@/library/bili-api/data'
 import BAPI from '@/library/bili-api'
@@ -286,61 +291,83 @@ class MedalModule extends BaseModule {
   }
 
   /**
-   * 获取粉丝勋章任务信息
+   * 获取粉丝勋章的实时信息（点亮状态 + 任务列表）
+   *
+   * 粉丝勋章面板是启动时的快照，点亮状态会在运行过程中变化，需要以该接口为准。
+   * 一次请求同时用于刷新点亮状态与解析任务进度，避免重复请求。
+   *
    * @param targetId 主播的 UID
-   * @returns 任务列表，失败返回 null
+   * @returns 摘要信息；请求失败或数据缺失时返回 null
    */
-  static async getTaskInfo(targetId: number): Promise<LiveData.TaskItem[] | null> {
+  static async getActivatedMedalSummary(targetId: number): Promise<ActivatedMedalSummary | null> {
     try {
       const response = await BAPI.live.getActivatedMedalInfo(targetId)
-      if (response.code === 0) {
-        const data = response.data;
-        if (data.reach_free_intimacy_limit) {
-          console.warn(`${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`)
-          return null
-        }
-        else if (data.free_intimacy > 0) {
-          console.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`);
-        }
-        if (data.task_info) {
-          console.debug('BAPI.live.getActivatedMedalInfo response', response)
-          return data.task_info
-        }
+      if (response.code !== 0) {
+        // 未点亮的勋章可能直接返回非 0，调用频次高，这里只留 debug 级别日志
+        console.debug(`BAPI.live.getActivatedMedalInfo(${targetId}) 失败`, response.message)
+        return null
       }
-      return null
+      const data = response.data
+      if (!data) {
+        return null
+      }
+      if (data.reach_free_intimacy_limit) {
+        console.warn(
+          `${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`,
+        )
+      } else if (data.free_intimacy > 0) {
+        console.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`)
+      }
+      return {
+        isLighted: Boolean(data.is_lighted),
+        reachFreeIntimacyLimit: Boolean(data.reach_free_intimacy_limit),
+        tasks: data.task_info ?? [],
+      }
     } catch (error) {
-      console.error('获取任务信息出错:', error)
+      console.error('获取粉丝勋章信息出错:', error)
       return null
     }
   }
 
   /**
-   * 获取指定任务的进度
-   * @param targetId 主播的 UID
+   * 从任务列表中解析指定任务的进度
+   *
+   * @param tasks 任务列表；为 null 时视为无数据
    * @param title 任务标题
-   * @returns [当前进度, 总进度]
+   * @returns [当前进度, 总进度]；任务不存在或格式不符时返回 [0, 0]
    */
-  static async getMissionProgress(targetId: number, title: string): Promise<[number, number]> {
-    try {
-      const targetTask = await MedalModule.getTaskInfo(targetId)
-      if (!targetTask) {
+  static parseMissionProgress(tasks: LiveData.TaskItem[] | null, title: string): [number, number] {
+    if (!tasks) {
+      return [0, 0]
+    }
+    for (const task of tasks) {
+      if (task.title === title) {
+        const subTitle = task.sub_title
+        const regex = /每日上限\s*(\d+)\/(\d+)/
+        const match = subTitle?.match(regex)
+        if (match) {
+          return [parseInt(match[1], 10), parseInt(match[2], 10)]
+        }
         return [0, 0]
       }
-      for (const task of targetTask) {
-        if (task.title === title) {
-          const subTitle = task.sub_title
-          const regex = /每日上限\s*(\d+)\/(\d+)/
-          const match = subTitle?.match(regex)
-          if (match) {
-            return [parseInt(match[1], 10), parseInt(match[2], 10)]
-          }
-          return [0, 0]
-        }
-      }
-    } catch (error) {
-      console.error('获取任务进度出错:', error)
     }
     return [0, 0]
+  }
+
+  /**
+   * 获取指定任务的进度
+   *
+   * @param targetId 主播的 UID
+   * @param title 任务标题
+   * @returns [当前进度, 总进度]；任务信息不可用时返回 [0, 0]
+   */
+  static async getMissionProgress(targetId: number, title: string): Promise<[number, number]> {
+    const summary = await MedalModule.getActivatedMedalSummary(targetId)
+    // 亲密度储蓄已满时无法继续做任务，保持原有的「无进度」语义
+    if (!summary || summary.reachFreeIntimacyLimit) {
+      return [0, 0]
+    }
+    return MedalModule.parseMissionProgress(summary.tasks, title)
   }
 }
 
