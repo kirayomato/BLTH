@@ -237,6 +237,7 @@ class LightTask extends MedalModule {
       return {
         available: false,
         isLighted: medal.medal.is_lighted === 1,
+        freeIntimacy: null,
         reachFreeIntimacyLimit: false,
         prog: 0,
         total: 0,
@@ -248,6 +249,7 @@ class LightTask extends MedalModule {
     return {
       available: true,
       isLighted,
+      freeIntimacy: summary.freeIntimacy,
       reachFreeIntimacyLimit: summary.reachFreeIntimacyLimit,
       prog,
       total,
@@ -319,6 +321,8 @@ class LightTask extends MedalModule {
         avatar: medal.anchor_info.avatar,
         medal_level: medal.medal.level,
         is_lighted: isLighted,
+        freeIntimacy: state.freeIntimacy,
+        reachFreeIntimacyLimit: state.reachFreeIntimacyLimit,
         likeProgress,
         likeProgressTotal,
       })

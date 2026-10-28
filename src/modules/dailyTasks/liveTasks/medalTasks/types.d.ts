@@ -31,6 +31,10 @@ interface LikeRoomCandidate {
   medal_level: number
   /** 粉丝勋章是否已点亮 */
   is_lighted: boolean
+  /** 亲密度储蓄值（上限 100）；信息不可用时为 null */
+  freeIntimacy: number | null
+  /** 亲密度储蓄是否已满（满了点赞不再增加亲密度） */
+  reachFreeIntimacyLimit: boolean
   /** 「点赞30次」任务当前进度；未点亮时为 null（任务信息不可用的直播间不会进候选） */
   likeProgress: number | null
   /** 「点赞30次」任务进度上限；未点亮时为 null（任务信息不可用的直播间不会进候选） */
@@ -57,6 +61,8 @@ interface LikeCandidateSnapshot {
 interface ActivatedMedalSummary {
   /** 是否已点亮 */
   isLighted: boolean
+  /** 亲密度储蓄值（上限 100） */
+  freeIntimacy: number
   /** 亲密度储蓄是否已满（满了无法继续做任务） */
   reachFreeIntimacyLimit: boolean
   /** 任务列表；接口未返回时为空数组 */
@@ -73,6 +79,8 @@ interface MedalMissionState {
   available: boolean
   /** 是否已点亮（已同步回勋章快照） */
   isLighted: boolean
+  /** 亲密度储蓄值；请求失败或数据缺失时为 null */
+  freeIntimacy: number | null
   /** 亲密度储蓄是否已满（满了无法继续做任务） */
   reachFreeIntimacyLimit: boolean
   /** 任务当前进度 */

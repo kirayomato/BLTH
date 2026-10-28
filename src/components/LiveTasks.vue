@@ -16,6 +16,10 @@ interface MedalRow {
   roomid: number
   /** 粉丝勋章是否已点亮 */
   is_lighted: boolean
+  /** 亲密度储蓄值，仅点赞流程收集过 */
+  freeIntimacy?: number | null
+  /** 亲密度储蓄是否已满，仅点赞流程收集过 */
+  reachFreeIntimacyLimit?: boolean
   /** 「点赞30次」任务进度，仅点赞流程收集过 */
   likeProgress?: number | null
   /** 「点赞30次」任务进度上限，仅点赞流程收集过 */
@@ -251,12 +255,15 @@ const handleManualLike = async () => {
     medalInfoPanelVisible.value = true
 
     // 等对话框加载好后再对表格进行操作，先清掉上一次的选择再逐行勾选：
-    // 表格实例会保留上一次的选择状态，直接 toggleAllSelection 反而会把默认选中的行取消掉
+    // 表格实例会保留上一次的选择状态，直接 toggleAllSelection 反而会把默认选中的行取消掉。
+    // 亲密度储蓄已满的勋章默认不勾选：点赞不再涨亲密度，需要时手动勾上
     await nextTick()
     medalInfoTableRef.value?.clearSelection()
-    likeCandidates.value.forEach((row) => {
-      medalInfoTableRef.value?.toggleRowSelection(row, true)
-    })
+    likeCandidates.value
+      .filter((row) => !row.reachFreeIntimacyLimit)
+      .forEach((row) => {
+        medalInfoTableRef.value?.toggleRowSelection(row, true)
+      })
   } catch (error) {
     ElMessage.error(`获取可点赞直播间失败：${(error as Error).message}`)
   } finally {
@@ -455,11 +462,11 @@ watch(
       :title="isLikeMode ? '选择要点赞的直播间' : '编辑粉丝勋章名单'"
       :lock-scroll="false"
       :close-on-click-modal="!isLikeMode"
-      width="62%"
+      :width="isLikeMode ? '85%' : '65%'"
     >
       <el-text v-if="isLikeMode" type="info" class="like-summary">
         共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（上限
-        {{ likeDailyLimit }}，未点亮勋章的点赞不计数、不受限）。勾选后点击【开始点赞】，关闭窗口视为取消。
+        {{ likeDailyLimit }}，未点亮勋章的点赞不计数、不受限）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。
       </el-text>
       <VueDraggable
         v-model="medalTableData"
@@ -517,6 +524,26 @@ watch(
               <el-tag :type="scope.row.is_lighted ? 'success' : 'info'" size="small" effect="plain">
                 {{ scope.row.is_lighted ? '已点亮' : '未点亮' }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="isLikeMode" label="亲密度" width="120" align="center">
+            <template #default="scope">
+              <el-tag
+                v-if="scope.row.reachFreeIntimacyLimit"
+                type="warning"
+                size="small"
+                effect="plain"
+              >
+                已满 {{ scope.row.freeIntimacy }}
+              </el-tag>
+              <el-text
+                v-else-if="typeof scope.row.freeIntimacy === 'number'"
+                type="info"
+                size="small"
+              >
+                {{ scope.row.freeIntimacy }}
+              </el-text>
+              <el-text v-else type="info">—</el-text>
             </template>
           </el-table-column>
           <el-table-column v-if="isLikeMode" label="点赞进度" width="150">

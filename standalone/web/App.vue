@@ -166,11 +166,13 @@ async function loadLikeCandidates(): Promise<void> {
       return
     }
 
-    // 默认全选，用户再按需去掉不想点赞的房间
+    // 默认全选，用户再按需去掉不想点赞的房间；亲密度储蓄已满的默认不勾选
     await nextTick()
-    likeCandidates.value.forEach((row) => {
-      likeTableRef.value?.toggleRowSelection(row, true)
-    })
+    likeCandidates.value
+      .filter((row) => !row.reachFreeIntimacyLimit)
+      .forEach((row) => {
+        likeTableRef.value?.toggleRowSelection(row, true)
+      })
   } catch (err) {
     likeCandidates.value = []
     ElMessage.error(`获取可点赞直播间失败：${(err as Error).message}`)
@@ -278,6 +280,22 @@ async function runLike(): Promise<void> {
         <el-table-column label="点亮" width="80" align="center">
           <template #default="scope">{{ scope.row.is_lighted ? '已点亮' : '未点亮' }}</template>
         </el-table-column>
+        <el-table-column label="亲密度" width="90" align="center">
+          <template #default="scope">
+            <el-tag
+              v-if="scope.row.reachFreeIntimacyLimit"
+              type="warning"
+              size="small"
+              effect="plain"
+            >
+              已满 {{ scope.row.freeIntimacy }}
+            </el-tag>
+            <span v-else-if="typeof scope.row.freeIntimacy === 'number'">
+              {{ scope.row.freeIntimacy }}
+            </span>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="点赞进度" width="140">
           <template #default="scope">
             <template v-if="hasLikeProgress(scope.row)">
@@ -330,7 +348,7 @@ async function runLike(): Promise<void> {
 
 <style scoped>
 .page {
-  max-width: 760px;
+  max-width: 960px;
   margin: 0 auto;
   padding: 28px 16px 48px;
 }

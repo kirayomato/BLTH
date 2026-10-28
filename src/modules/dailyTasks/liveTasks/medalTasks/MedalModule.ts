@@ -322,6 +322,7 @@ class MedalModule extends BaseModule {
       }
       return {
         isLighted: isLighted,
+        freeIntimacy: data.free_intimacy ?? 0,
         reachFreeIntimacyLimit: Boolean(data.reach_free_intimacy_limit),
         tasks: data.task_info ?? [],
       }
