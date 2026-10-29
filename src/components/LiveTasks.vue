@@ -526,7 +526,7 @@ watch(
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column v-if="isLikeMode" label="亲密度" width="120" align="center">
+          <el-table-column v-if="isLikeMode" label="亲密度储蓄" width="120" align="center">
             <template #default="scope">
               <el-tag
                 v-if="scope.row.reachFreeIntimacyLimit"
