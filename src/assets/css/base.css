@@ -39,6 +39,27 @@ ol {
 }
 
 /**
+  覆盖B站页面给输入框内层元素加的边框和背景
+  输入框自己的框在 .el-input__wrapper 上，内层元素再带一层框就会出现双层边框
+ */
+.el-input input.el-input__inner {
+  padding: 0 !important;
+  appearance: none !important;
+  outline: none !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.el-input .el-input__prefix,
+.el-input .el-input__suffix {
+  outline: none !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/**
   适配实验室的“屏幕适配”功能
   原理：屏幕适配css中的zoom值为n，此处就设置为1/n
  */

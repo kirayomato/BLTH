@@ -16,6 +16,7 @@ interface HelpInfo {
     LiveTasks: {
       medalTasks: {
         list: HelpInfoItem
+        priority: HelpInfoItem
         light: HelpInfoItem
         watch: HelpInfoItem
       }

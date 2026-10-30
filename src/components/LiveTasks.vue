@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useModuleStore, useBiliStore, useUIStore } from '@/stores'
-import { Check, Edit, Delete } from '@element-plus/icons-vue'
+import { Check, Edit, Delete, Rank, Search, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import helpInfo from '@/library/help-info'
 import { VueDraggable } from 'vue-draggable-plus'
@@ -85,20 +85,26 @@ const handleAddDanmu = () => {
 }
 
 const medalInfoPanelVisible = ref<boolean>(false)
-/** 名单窗口的用途：编辑黑白名单 / 选择要执行点赞的直播间（点赞复用同一个窗口） */
-const medalInfoPanelMode = ref<'list' | 'like'>('list')
+/** 名单窗口的用途：编辑黑白名单 / 选择要执行点赞的直播间 / 编辑优先名单（点赞与优先名单复用同一个窗口） */
+const medalInfoPanelMode = ref<'list' | 'like' | 'priority'>('list')
 const isLikeMode = computed(() => medalInfoPanelMode.value === 'like')
+const isPriorityMode = computed(() => medalInfoPanelMode.value === 'priority')
+
+/** 粉丝勋章名单的完整数据（不受排序模式影响），优先名单窗口直接用这一份 */
+const allMedalRows = computed<MedalRow[]>(() =>
+  biliStore.filteredFansMedals.map((medal) => ({
+    avatar: medal.anchor_info.avatar,
+    nick_name: medal.anchor_info.nick_name,
+    medal_name: medal.medal.medal_name,
+    medal_level: medal.medal.level,
+    roomid: medal.room_info.room_id,
+    is_lighted: medal.medal.is_lighted === 1,
+  })),
+)
 
 const medalInfoTableData = computed({
   get() {
-    const medals = biliStore.filteredFansMedals.map((medal) => ({
-      avatar: medal.anchor_info.avatar,
-      nick_name: medal.anchor_info.nick_name,
-      medal_name: medal.medal.medal_name,
-      medal_level: medal.medal.level,
-      roomid: medal.room_info.room_id,
-      is_lighted: medal.medal.is_lighted === 1,
-    }))
+    const medals = allMedalRows.value
     if (uiStore.uiConfig.medalInfoPanelSortMode) {
       const filteredMedals = medals.filter((medal) =>
         config.medalTasks.isWhiteList
@@ -115,30 +121,168 @@ const medalInfoTableData = computed({
   },
 })
 
-/** 窗口表格数据：点赞模式下展示可点赞的直播间，其余情况展示粉丝勋章名单 */
+/** 窗口表格数据：点赞模式下展示可点赞的直播间，优先名单模式下展示全部粉丝勋章，其余情况展示黑白名单 */
 const medalTableData = computed<MedalRow[]>({
   get() {
-    return isLikeMode.value ? likeCandidates.value : medalInfoTableData.value
+    if (isLikeMode.value) return likeCandidates.value
+    if (isPriorityMode.value) return allMedalRows.value
+    return medalInfoTableData.value
   },
   set(rows: MedalRow[]) {
-    // 点赞模式下的顺序调整没有意义，只有编辑名单时才回写黑白名单
-    if (!isLikeMode.value) {
+    // 点赞模式下的顺序调整没有意义，优先名单不通过拖拽编辑，只有编辑名单时才回写黑白名单
+    if (!isLikeMode.value && !isPriorityMode.value) {
       medalInfoTableData.value = rows
     }
   },
 })
+/** 窗口内搜索关键字（昵称 / 粉丝勋章 / 房间号），只影响显示 */
+const medalSearchText = ref<string>('')
+/** 窗口内筛选条件，只影响显示 */
+const medalFilter = ref<'all' | 'lighted' | 'unlighted' | 'checked' | 'unchecked'>('all')
+/** 搜索/筛选是否生效 */
+const medalFilterActive = computed(
+  () => medalSearchText.value.trim() !== '' || medalFilter.value !== 'all',
+)
+/** 搜索/筛选后的显示行 */
+const filteredMedalRows = computed<MedalRow[]>(() => {
+  // 复制一份，避免表格内置排序改动数据源，进而影响名单回写顺序
+  let rows = [...medalTableData.value]
+  const keyword = medalSearchText.value.trim().toLowerCase()
+  if (keyword) {
+    rows = rows.filter(
+      (row) =>
+        row.nick_name.toLowerCase().includes(keyword) ||
+        row.medal_name.toLowerCase().includes(keyword) ||
+        String(row.roomid).includes(keyword),
+    )
+  }
+  if (medalFilter.value === 'lighted' || medalFilter.value === 'unlighted') {
+    rows = rows.filter((row) => row.is_lighted === (medalFilter.value === 'lighted'))
+  } else if (medalFilter.value === 'checked' || medalFilter.value === 'unchecked') {
+    // 勾选状态随编辑实时变化：在「仅已勾选」下取消勾选后该行会立即移出显示
+    const checked = new Set(getCheckedRoomids())
+    rows = rows.filter((row) => checked.has(row.roomid) === (medalFilter.value === 'checked'))
+  }
+  return rows
+})
+/** 表格是否提供多选框（排序模式下编辑名单时用拖拽排序，不提供多选框） */
+const medalTableHasSelection = computed(
+  () => isLikeMode.value || isPriorityMode.value || !uiStore.uiConfig.medalInfoPanelSortMode,
+)
+/** 表头是否可点击排序；排序模式下拖拽顺序才是执行顺序，此时不提供表头排序 */
+const medalTableSortable = computed(
+  () => medalInfoPanelMode.value !== 'list' || !uiStore.uiConfig.medalInfoPanelSortMode,
+)
+
 /** 是否显示加载中图标 */
 const medalInfoLoading = ref<boolean>(false)
+/** 用来管理多选框状态的表格Ref */
+const medalInfoTableRef = ref<InstanceType<typeof ElTable>>()
+
+/** 当前窗口已勾选的直播间号，数组顺序即最终写入顺序：点赞模式是待点赞的房间，其余是对应名单 */
+const getCheckedRoomids = (): number[] =>
+  isLikeMode.value
+    ? likeSelection.value.map((row) => row.roomid)
+    : isPriorityMode.value
+      ? [...config.medalTasks.roomidList2]
+      : [...config.medalTasks.roomidList]
+
+/** 窗口中可勾选的行：点赞模式是候选直播间，其余是全部粉丝勋章 */
+const sourceRows = computed<MedalRow[]>(() =>
+  isLikeMode.value ? likeCandidates.value : allMedalRows.value,
+)
+
+/** 把最终顺序回写到对应名单 */
+const writeCheckedRoomids = (roomids: number[]) => {
+  if (isLikeMode.value) {
+    const rowByRoomid = new Map(sourceRows.value.map((row) => [row.roomid, row]))
+    likeSelection.value = roomids
+      .map((roomid) => rowByRoomid.get(roomid))
+      .filter((row): row is MedalRow => Boolean(row))
+  } else if (isPriorityMode.value) {
+    config.medalTasks.roomidList2 = roomids
+  } else {
+    config.medalTasks.roomidList = roomids
+  }
+}
+
+/** 把勾选结果同步到表格，只处理当前显示的行 */
+const syncSelection = () => {
+  if (!medalTableHasSelection.value) return
+  const checked = new Set(getCheckedRoomids())
+  filteredMedalRows.value.forEach((row) => {
+    medalInfoTableRef.value?.toggleRowSelection(row, checked.has(row.roomid))
+  })
+}
+
 /**
- * 编辑名单
+ * 打开窗口时按名单初始化勾选
+ *
+ * 名单里可能残留已被删除或被过滤的粉丝勋章，勾选前先把没有对应行的直播间号剔除。
  */
-const handleEditList = async () => {
-  medalInfoPanelMode.value = 'list'
+const initSelection = () => {
+  const available = new Set(allMedalRows.value.map((row) => row.roomid))
+  if (isPriorityMode.value) {
+    config.medalTasks.roomidList2 = config.medalTasks.roomidList2.filter((roomid) =>
+      available.has(roomid),
+    )
+  } else if (!isLikeMode.value) {
+    config.medalTasks.roomidList = config.medalTasks.roomidList.filter((roomid) =>
+      available.has(roomid),
+    )
+  }
+  syncSelection()
+}
+
+/** 打开窗口时清空搜索与筛选 */
+const resetMedalFilters = () => {
+  medalSearchText.value = ''
+  medalFilter.value = 'all'
+}
+
+// 搜索/筛选后表格行会被替换，重新按名单勾选，避免勾选状态丢失
+watch(filteredMedalRows, () => nextTick(syncSelection))
+
+/** 调整写入顺序窗口是否可见 */
+const orderPanelVisible = ref<boolean>(false)
+// 名单窗口关闭时一并关闭顺序窗口，避免下次打开时残留
+watch(medalInfoPanelVisible, (visible) => {
+  if (!visible) orderPanelVisible.value = false
+})
+
+/** 已勾选的行，按最终写入顺序排列 */
+const orderedCheckedRows = computed<MedalRow[]>({
+  get() {
+    const rowByRoomid = new Map(sourceRows.value.map((row) => [row.roomid, row]))
+    return getCheckedRoomids()
+      .map((roomid) => rowByRoomid.get(roomid))
+      .filter((row): row is MedalRow => Boolean(row))
+  },
+  set(rows: MedalRow[]) {
+    writeCheckedRoomids(rows.map((row) => row.roomid))
+  },
+})
+
+/** 恢复默认顺序：按表格顺序排列 */
+const resetOrder = () => {
+  const checked = new Set(getCheckedRoomids())
+  writeCheckedRoomids(
+    sourceRows.value.filter((row) => checked.has(row.roomid)).map((row) => row.roomid),
+  )
+}
+
+/**
+ * 打开名单窗口
+ * @param mode 窗口用途：编辑黑白名单 / 编辑优先名单
+ */
+const openMedalPanel = async (mode: 'list' | 'priority') => {
+  medalInfoPanelMode.value = mode
+  resetMedalFilters()
   medalInfoPanelVisible.value = true
 
   // 等对话框加载好后再对表格进行操作
   await nextTick()
-  // 点赞流程会清空表格的选择状态，每次打开都按黑白名单重新勾选
+  // 点赞流程会清空表格的选择状态，每次打开都按对应名单重新勾选
   medalInfoTableRef.value?.clearSelection()
 
   // 如果没有粉丝勋章信息，先获取
@@ -146,10 +290,10 @@ const handleEditList = async () => {
     medalInfoLoading.value = true
     // 等待数据被获取到
     watch(
-      medalInfoTableData,
-      (newData) => {
+      allMedalRows,
+      () => {
         nextTick(() => {
-          initSelection(newData)
+          initSelection()
           medalInfoLoading.value = false
         })
       },
@@ -161,48 +305,45 @@ const handleEditList = async () => {
     return
   }
 
-  initSelection(medalInfoTableData.value)
+  initSelection()
 }
-/** 用来管理多选框状态的表格Ref */
-const medalInfoTableRef = ref<InstanceType<typeof ElTable>>()
-
-/** 初始化多选框选择状态 */
-const initSelection = (rows?: MedalRow[]) => {
-  // 排序模式下不初始化多选框选择状态
-  if (rows && !uiStore.uiConfig.medalInfoPanelSortMode) {
-    config.medalTasks.roomidList.forEach((roomid, index) => {
-      const row = rows.find((row) => row.roomid === roomid)
-      if (row) {
-        medalInfoTableRef.value?.toggleRowSelection(row, true)
-      } else {
-        // 没有找到直播间号为 roomid 的粉丝勋章，可能是因为该粉丝勋章已被删除或是过滤
-        // 从黑白名单中去掉这个 roomid
-        config.medalTasks.roomidList.splice(index, 1)
-      }
-    })
-  }
-}
+/** 编辑名单 */
+const handleEditList = () => openMedalPanel('list')
+/** 编辑优先名单 */
+const handleEditPriorityList = () => openMedalPanel('priority')
 
 function handleSelect(selection: MedalRow[]) {
-  // 点赞模式下多选框用来挑选要执行点赞的直播间，不影响黑白名单
-  if (isLikeMode.value) {
-    likeSelection.value = selection
-    return
-  }
-  config.medalTasks.roomidList = selection.map((row) => row.roomid)
+  const visibleIds = new Set(filteredMedalRows.value.map((row) => row.roomid))
+  const selectedIds = new Set(selection.map((row) => row.roomid))
+  // 搜索/筛选隐藏的行保持原勾选状态，显示的行以本次选择为准；
+  // 已勾选的保持原有写入顺序，新勾选的排在末尾
+  const roomids = getCheckedRoomids().filter(
+    (roomid) => !visibleIds.has(roomid) || selectedIds.has(roomid),
+  )
+  const known = new Set(roomids)
+  sourceRows.value.forEach((row) => {
+    if (selectedIds.has(row.roomid) && !known.has(row.roomid)) {
+      roomids.push(row.roomid)
+      known.add(row.roomid)
+    }
+  })
+  writeCheckedRoomids(roomids)
 }
 
 function handleRowClick(row: MedalRow) {
   // 排序模式下（仅在编辑名单时有意义）不切换选择状态
-  if (!isLikeMode.value && uiStore.uiConfig.medalInfoPanelSortMode) return
+  if (!medalTableHasSelection.value) return
 
-  // 切换当前行的选择状态
-  medalInfoTableRef.value?.toggleRowSelection(row)
-  const selection: MedalRow[] = medalInfoTableRef.value?.getSelectionRows() ?? []
-  if (isLikeMode.value) {
-    likeSelection.value = selection
+  const roomids = getCheckedRoomids()
+  const index = roomids.indexOf(row.roomid)
+  if (index >= 0) {
+    roomids.splice(index, 1)
+    writeCheckedRoomids(roomids)
+    medalInfoTableRef.value?.toggleRowSelection(row, false)
   } else {
-    config.medalTasks.roomidList = selection.map((row) => row.roomid)
+    // 新勾选的排在末尾，具体位置在【调整顺序】窗口里改
+    writeCheckedRoomids([...roomids, row.roomid])
+    medalInfoTableRef.value?.toggleRowSelection(row, true)
   }
 }
 
@@ -249,21 +390,17 @@ const handleManualLike = async () => {
     likeCandidates.value = snapshot.candidates
     likeTodayLikes.value = snapshot.todayLikes
     likeDailyLimit.value = snapshot.dailyLimit
-    likeSelection.value = []
+    // 亲密度储蓄已满的勋章默认不勾选：点赞不再涨亲密度，需要时手动勾上
+    likeSelection.value = likeCandidates.value.filter((row) => !row.reachFreeIntimacyLimit)
 
     medalInfoPanelMode.value = 'like'
+    resetMedalFilters()
     medalInfoPanelVisible.value = true
 
-    // 等对话框加载好后再对表格进行操作，先清掉上一次的选择再逐行勾选：
-    // 表格实例会保留上一次的选择状态，直接 toggleAllSelection 反而会把默认选中的行取消掉。
-    // 亲密度储蓄已满的勋章默认不勾选：点赞不再涨亲密度，需要时手动勾上
+    // 等对话框加载好后再把勾选状态同步到表格
     await nextTick()
     medalInfoTableRef.value?.clearSelection()
-    likeCandidates.value
-      .filter((row) => !row.reachFreeIntimacyLimit)
-      .forEach((row) => {
-        medalInfoTableRef.value?.toggleRowSelection(row, true)
-      })
+    syncSelection()
   } catch (error) {
     ElMessage.error(`获取可点赞直播间失败：${(error as Error).message}`)
   } finally {
@@ -293,19 +430,6 @@ const handleConfirmLikeSelection = async () => {
 /** 取消点赞：直接关闭窗口即可，模块侧没有挂起的等待 */
 const handleCancelLikeSelection = () => {
   medalInfoPanelVisible.value = false
-}
-
-/**
- * 表格选择变化
- *
- * 点赞模式下用它同步勾选结果：默认全选是通过 toggleRowSelection 逐行勾选的，
- * 只会触发 selection-change，不会触发 select / select-all。
- * 名单模式下这里不处理，避免拖拽排序与初始化勾选互相覆盖黑白名单。
- */
-const handleSelectionChange = (rows: MedalRow[]) => {
-  if (isLikeMode.value) {
-    likeSelection.value = rows
-  }
 }
 
 /** 「点赞30次」任务是否有可展示的进度（未点亮或任务信息缺失时为 false） */
@@ -416,6 +540,10 @@ watch(
           >编辑名单
         </el-button>
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.list" />
+        <el-button type="primary" size="small" :icon="Star" @click="handleEditPriorityList"
+          >优先名单
+        </el-button>
+        <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.priority" />
       </el-space>
     </el-row>
     <el-divider />
@@ -459,19 +587,54 @@ watch(
     </el-dialog>
     <el-dialog
       v-model="medalInfoPanelVisible"
-      :title="isLikeMode ? '选择要点赞的直播间' : '编辑粉丝勋章名单'"
+      :title="
+        isLikeMode ? '选择要点赞的直播间' : isPriorityMode ? '编辑优先名单' : '编辑粉丝勋章名单'
+      "
       :lock-scroll="false"
       :close-on-click-modal="!isLikeMode"
       :width="isLikeMode ? '85%' : '65%'"
     >
-      <el-text v-if="isLikeMode" type="info" class="like-summary">
+      <el-text v-if="isLikeMode" type="info" class="panel-summary">
         共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（上限
         {{ likeDailyLimit }}，未点亮勋章的点赞不计数、不受限）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。
       </el-text>
+      <el-text v-if="isPriorityMode" type="info" class="panel-summary">
+        roomidList2
+      </el-text>
+      <el-row class="filter-bar" :gutter="8">
+        <el-col :span="11">
+          <el-input
+            v-model="medalSearchText"
+            placeholder="搜索昵称 / 粉丝勋章 / 房间号"
+            clearable
+            :prefix-icon="Search"
+          />
+        </el-col>
+        <el-col :span="7">
+          <el-select v-model="medalFilter" style="width: 100%">
+            <el-option label="全部" value="all" />
+            <el-option-group label="点亮状态">
+              <el-option label="仅已点亮" value="lighted" />
+              <el-option label="仅未点亮" value="unlighted" />
+            </el-option-group>
+            <el-option-group label="勾选状态">
+              <el-option label="仅已勾选" value="checked" />
+              <el-option label="仅未勾选" value="unchecked" />
+            </el-option-group>
+          </el-select>
+        </el-col>
+        <el-col :span="6">
+          <el-button :icon="Rank" style="width: 100%" @click="orderPanelVisible = true"
+            >调整顺序
+          </el-button>
+        </el-col>
+      </el-row>
       <VueDraggable
         v-model="medalTableData"
         target="#draggable-fans-medal-table table tbody"
-        :disabled="isLikeMode || !uiStore.uiConfig.medalInfoPanelSortMode"
+        :disabled="
+          isLikeMode || isPriorityMode || medalFilterActive || !uiStore.uiConfig.medalInfoPanelSortMode
+        "
         :animation="150"
         :scroll-sensitivity="36"
         :scroll-speed="8"
@@ -480,16 +643,15 @@ watch(
           id="draggable-fans-medal-table"
           ref="medalInfoTableRef"
           v-loading="medalInfoLoading"
-          :data="medalTableData"
+          :data="filteredMedalRows"
           :max-height="medalTableMaxHeight"
-          empty-text="没有粉丝勋章"
+          :empty-text="medalFilterActive ? '没有匹配的粉丝勋章' : '没有粉丝勋章'"
           :row-key="(row: MedalRow) => row.roomid.toString()"
           @select="handleSelect"
           @select-all="handleSelect"
-          @selection-change="handleSelectionChange"
           @row-click="handleRowClick"
         >
-          <template v-if="isLikeMode || !uiStore.uiConfig.medalInfoPanelSortMode">
+          <template v-if="medalTableHasSelection">
             <el-table-column type="selection" align="center" width="60" />
           </template>
           <template v-else>
@@ -516,9 +678,25 @@ watch(
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="nick_name" label="昵称" min-width="110" />
-          <el-table-column prop="medal_name" label="粉丝勋章" min-width="100" />
-          <el-table-column prop="medal_level" label="等级" width="70" align="center" />
+          <el-table-column
+            prop="nick_name"
+            label="昵称"
+            min-width="110"
+            :sortable="medalTableSortable"
+          />
+          <el-table-column
+            prop="medal_name"
+            label="粉丝勋章"
+            min-width="100"
+            :sortable="medalTableSortable"
+          />
+          <el-table-column
+            prop="medal_level"
+            label="等级"
+            width="70"
+            align="center"
+            :sortable="medalTableSortable"
+          />
           <el-table-column label="点亮状态" width="90" align="center">
             <template #default="scope">
               <el-tag :type="scope.row.is_lighted ? 'success' : 'info'" size="small" effect="plain">
@@ -561,7 +739,12 @@ watch(
               <el-text v-else type="info">—</el-text>
             </template>
           </el-table-column>
-          <el-table-column prop="roomid" label="房间号" width="120">
+          <el-table-column
+            prop="roomid"
+            label="房间号"
+            width="120"
+            :sortable="medalTableSortable"
+          >
             <template #default="scope">
               <el-link
                 :href="'https://live.bilibili.com/' + scope.row.roomid + '?visit_id='"
@@ -587,15 +770,46 @@ watch(
             开始点赞（{{ likeSelection.length }}）
           </el-button>
         </template>
-        <el-switch
-          v-else
-          v-model="uiStore.uiConfig.medalInfoPanelSortMode"
-          :disabled="!config.medalTasks.isWhiteList"
-          inactive-text="常规模式"
-          active-text="排序模式"
-          @change="(val) => !val && nextTick(() => initSelection(medalInfoTableData))"
-        />
+        <el-text v-else-if="isPriorityMode" type="info">
+          已选 {{ config.medalTasks.roomidList2.length }} 个直播间
+        </el-text>
+        <template v-else>
+          <el-text
+            v-if="medalFilterActive && uiStore.uiConfig.medalInfoPanelSortMode"
+            type="info"
+            class="filter-hint"
+          >
+            搜索/筛选生效时无法拖拽排序
+          </el-text>
+          <el-switch
+            v-model="uiStore.uiConfig.medalInfoPanelSortMode"
+            :disabled="!config.medalTasks.isWhiteList"
+            inactive-text="常规模式"
+            active-text="排序模式"
+            @change="(val) => !val && nextTick(() => initSelection())"
+          />
+        </template>
       </template>
+      <el-dialog v-model="orderPanelVisible" title="调整写入顺序" :lock-scroll="false" width="40%">
+        <el-text type="info" class="panel-summary">
+          拖拽调整名单的写入顺序，顺序决定任务执行的先后；新勾选的直播间会排在末尾。
+        </el-text>
+        <el-empty
+          v-if="orderedCheckedRows.length === 0"
+          description="还没有勾选任何直播间"
+          :image-size="60"
+        />
+        <VueDraggable v-else v-model="orderedCheckedRows" class="order-list" :animation="150">
+          <div v-for="(row, index) in orderedCheckedRows" :key="row.roomid" class="order-item">
+            <el-icon class="order-handle"><Rank /></el-icon>
+            <el-text>{{ index + 1 }}. {{ row.nick_name }}（{{ row.roomid }}）</el-text>
+          </div>
+        </VueDraggable>
+        <template #footer>
+          <el-button @click="resetOrder">恢复默认顺序</el-button>
+          <el-button type="primary" @click="orderPanelVisible = false">完成</el-button>
+        </template>
+      </el-dialog>
     </el-dialog>
   </div>
 </template>
@@ -606,10 +820,41 @@ watch(
   height: 80px;
 }
 
-.like-summary {
+.panel-summary {
   display: block;
   margin-bottom: 8px;
   line-height: 1.7;
+}
+
+.filter-bar {
+  margin-bottom: 8px;
+}
+
+.filter-hint {
+  margin-right: 8px;
+}
+
+.order-list {
+  max-height: 40vh;
+  padding: 2px;
+  overflow: auto;
+}
+
+.order-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  cursor: grab;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+
+.order-handle {
+  color: var(--el-text-color-secondary);
+  cursor: grab;
 }
 
 .avatar {
