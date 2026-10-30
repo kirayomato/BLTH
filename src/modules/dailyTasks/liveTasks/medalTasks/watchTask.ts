@@ -279,7 +279,7 @@ class WatchTask extends MedalModule {
         medal.medal.is_lighted
         && (
           this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal)
-          && (this.medalTasksConfig.roomidList2.includes(medal.room_info.room_id)
+          && (this.medalTasksConfig.roomidList2.some((entry) => entry.roomid === medal.room_info.room_id)
             || medal.medal.level < 20)
         )
     );

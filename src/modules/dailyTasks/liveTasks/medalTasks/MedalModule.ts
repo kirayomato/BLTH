@@ -37,16 +37,18 @@ class MedalModule extends BaseModule {
 
   protected PUBLIC_MEDAL_FILTERS: PublicMedalFilters = {
     // 包含在白名单中或不包含在黑名单中返回true，否则返回false
-    whiteBlackList: (m) =>
-      this.medalTasksConfig.isWhiteList
-        ? this.medalTasksConfig.roomidList.includes(m.room_info.room_id)
-        : !this.medalTasksConfig.roomidList.includes(m.room_info.room_id),
+    whiteBlackList: (m) => {
+      const inList = this.medalTasksConfig.roomidList.some(
+        (entry) => entry.roomid === m.room_info.room_id,
+      )
+      return this.medalTasksConfig.isWhiteList ? inList : !inList
+    },
     // 等级小于120返回true，否则返回false
     levelLt120: (medal) => medal.medal.level < 120,
   }
 
   protected sortMedals(medals: LiveData.FansMedalPanel.List[]): LiveData.FansMedalPanel.List[] {
-    const orderMap = arrayToMap(this.medalTasksConfig.roomidList)
+    const orderMap = arrayToMap(this.medalTasksConfig.roomidList.map((entry) => entry.roomid))
     return medals.sort(
       (a, b) => orderMap.get(a.room_info.room_id)! - orderMap.get(b.room_info.room_id)!,
     )
@@ -98,11 +100,13 @@ class MedalModule extends BaseModule {
 
   sort_live_medals = (a: LiveData.FansMedalPanel.List, b: LiveData.FansMedalPanel.List) => {
     const roomid2 = this.medalTasksConfig.roomidList2
-    if (roomid2.includes(a.room_info.room_id) && roomid2.includes(b.room_info.room_id))
-      return roomid2.indexOf(a.room_info.room_id) - roomid2.indexOf(b.room_info.room_id);
-    else if (roomid2.includes(a.room_info.room_id))
+    const indexA = roomid2.findIndex((entry) => entry.roomid === a.room_info.room_id)
+    const indexB = roomid2.findIndex((entry) => entry.roomid === b.room_info.room_id)
+    if (indexA >= 0 && indexB >= 0)
+      return indexA - indexB;
+    else if (indexA >= 0)
       return -1;
-    else if (roomid2.includes(b.room_info.room_id))
+    else if (indexB >= 0)
       return 1;
     // - 返回 **负数**：a 放前面
     // - 返回 **正数**：b 放前面

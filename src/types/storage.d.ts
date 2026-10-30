@@ -1,3 +1,10 @@
+/** 房间名单条目：同时存储房间号和用户名 */
+interface RoomidEntry {
+  roomid: number
+  /** 用户名，允许留空，运行时按粉丝勋章数据自动更新 */
+  name: string
+}
+
 interface ModuleConfig {
   DailyTasks: {
     MainSiteTasks: {
@@ -42,8 +49,8 @@ interface ModuleConfig {
           _lastCompleteTime: number
         }
         isWhiteList: boolean
-        roomidList: number[]
-        roomidList2: number[]
+        roomidList: RoomidEntry[]
+        roomidList2: RoomidEntry[]
       }
     }
     OtherTasks: {
@@ -139,4 +146,4 @@ interface Cache {
   mainScriptLocation: string
 }
 
-export { ModuleConfig, UiConfig, Cache, MenuIndex }
+export { ModuleConfig, UiConfig, Cache, MenuIndex, RoomidEntry }

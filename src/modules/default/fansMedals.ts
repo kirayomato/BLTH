@@ -49,6 +49,25 @@ class FansMedals extends BaseModule {
     }
   }
 
+  /**
+   * 用粉丝勋章数据自动更新房间名单里的用户名
+   *
+   * 名单允许用户名留空，运行时获取到粉丝勋章后按房间号补全并保持最新；
+   * 不在粉丝勋章中的房间保留原名（可能为空）
+   *
+   * @param medals 刚获取到的粉丝勋章列表
+   */
+  private syncRoomListNames(medals: LiveData.FansMedalPanel.List[]): void {
+    const nameByRoomid = new Map(medals.map((m) => [m.room_info.room_id, m.anchor_info.nick_name]))
+    const { roomidList, roomidList2 } = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks
+    for (const entry of [...roomidList, ...roomidList2]) {
+      const name = nameByRoomid.get(entry.roomid)
+      if (name !== undefined && entry.name !== name) {
+        entry.name = name
+      }
+    }
+  }
+
   public async run(force = false): Promise<void> {
     const biliStore = useBiliStore()
 
@@ -65,6 +84,7 @@ class FansMedals extends BaseModule {
       biliStore.fansMedalsStatus = 'loading'
       biliStore.fansMedals = await this.getFansMedals()
       biliStore.fansMedalsStatus = 'loaded'
+      this.syncRoomListNames(biliStore.fansMedals)
     }
 
     this.nextRunTimer = setTimeout(

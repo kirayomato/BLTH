@@ -1,6 +1,6 @@
 import { GM_getValue, GM_setValue } from '$'
 import defaultValues from './defaultValues'
-import type { UiConfig, ModuleConfig, Cache } from '@/types'
+import type { UiConfig, ModuleConfig, Cache, RoomidEntry } from '@/types'
 import _ from 'lodash'
 
 class Storage {
@@ -51,12 +51,42 @@ class Storage {
     return this.mergeConfigs(GM_getValue('ui', {}), defaultValues.ui)
   }
 
+  /**
+   * 归一化房间名单
+   *
+   * 旧配置中房间名单是 number[]（只有房间号），迁移为 {roomid, name}[]，用户名留空，
+   * 运行时会按粉丝勋章数据自动更新；不合法的条目直接丢弃。
+   *
+   * @param list 存储中的原始名单
+   */
+  private static normalizeRoomidList(list: unknown): RoomidEntry[] {
+    if (!Array.isArray(list)) {
+      return []
+    }
+    const result: RoomidEntry[] = []
+    for (const item of list) {
+      if (typeof item === 'number') {
+        result.push({ roomid: item, name: '' })
+      } else if (_.isPlainObject(item)) {
+        const entry = item as { roomid?: unknown; name?: unknown }
+        if (typeof entry.roomid === 'number') {
+          result.push({ roomid: entry.roomid, name: typeof entry.name === 'string' ? entry.name : '' })
+        }
+      }
+    }
+    return result
+  }
+
   public static setModuleConfig(moduleConfig: ModuleConfig) {
     GM_setValue('modules', moduleConfig)
   }
 
   public static getModuleConfig(): ModuleConfig {
-    return this.mergeConfigs(GM_getValue('modules', {}), defaultValues.modules)
+    const moduleConfig = this.mergeConfigs(GM_getValue('modules', {}), defaultValues.modules)
+    const medalTasks = moduleConfig.DailyTasks.LiveTasks.medalTasks
+    medalTasks.roomidList = this.normalizeRoomidList(medalTasks.roomidList)
+    medalTasks.roomidList2 = this.normalizeRoomidList(medalTasks.roomidList2)
+    return moduleConfig
   }
 
   public static setCache(cache: Cache) {

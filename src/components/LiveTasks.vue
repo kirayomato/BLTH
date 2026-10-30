@@ -106,18 +106,22 @@ const medalInfoTableData = computed({
   get() {
     const medals = allMedalRows.value
     if (uiStore.uiConfig.medalInfoPanelSortMode) {
+      const listRoomids = new Set(config.medalTasks.roomidList.map((entry) => entry.roomid))
       const filteredMedals = medals.filter((medal) =>
         config.medalTasks.isWhiteList
-          ? config.medalTasks.roomidList.includes(medal.roomid)
-          : !config.medalTasks.roomidList.includes(medal.roomid),
+          ? listRoomids.has(medal.roomid)
+          : !listRoomids.has(medal.roomid),
       )
-      const orderMap = arrayToMap(config.medalTasks.roomidList)
+      const orderMap = arrayToMap(config.medalTasks.roomidList.map((entry) => entry.roomid))
       return filteredMedals.sort((a, b) => orderMap.get(a.roomid)! - orderMap.get(b.roomid)!)
     }
     return medals
   },
   set(newValue: MedalRow[]) {
-    config.medalTasks.roomidList = newValue.map((row) => row.roomid)
+    config.medalTasks.roomidList = newValue.map((row) => ({
+      roomid: row.roomid,
+      name: row.nick_name,
+    }))
   },
 })
 
@@ -184,25 +188,29 @@ const getCheckedRoomids = (): number[] =>
   isLikeMode.value
     ? likeSelection.value.map((row) => row.roomid)
     : isPriorityMode.value
-      ? [...config.medalTasks.roomidList2]
-      : [...config.medalTasks.roomidList]
+      ? config.medalTasks.roomidList2.map((entry) => entry.roomid)
+      : config.medalTasks.roomidList.map((entry) => entry.roomid)
 
 /** 窗口中可勾选的行：点赞模式是候选直播间，其余是全部粉丝勋章 */
 const sourceRows = computed<MedalRow[]>(() =>
   isLikeMode.value ? likeCandidates.value : allMedalRows.value,
 )
 
-/** 把最终顺序回写到对应名单 */
+/** 把最终顺序回写到对应名单；用户名取自当前行（留空则为空字符串） */
 const writeCheckedRoomids = (roomids: number[]) => {
   if (isLikeMode.value) {
     const rowByRoomid = new Map(sourceRows.value.map((row) => [row.roomid, row]))
     likeSelection.value = roomids
       .map((roomid) => rowByRoomid.get(roomid))
       .filter((row): row is MedalRow => Boolean(row))
-  } else if (isPriorityMode.value) {
-    config.medalTasks.roomidList2 = roomids
+    return
+  }
+  const nameByRoomid = new Map(sourceRows.value.map((row) => [row.roomid, row.nick_name]))
+  const entries = roomids.map((roomid) => ({ roomid, name: nameByRoomid.get(roomid) ?? '' }))
+  if (isPriorityMode.value) {
+    config.medalTasks.roomidList2 = entries
   } else {
-    config.medalTasks.roomidList = roomids
+    config.medalTasks.roomidList = entries
   }
 }
 
@@ -223,12 +231,12 @@ const syncSelection = () => {
 const initSelection = () => {
   const available = new Set(allMedalRows.value.map((row) => row.roomid))
   if (isPriorityMode.value) {
-    config.medalTasks.roomidList2 = config.medalTasks.roomidList2.filter((roomid) =>
-      available.has(roomid),
+    config.medalTasks.roomidList2 = config.medalTasks.roomidList2.filter((entry) =>
+      available.has(entry.roomid),
     )
   } else if (!isLikeMode.value) {
-    config.medalTasks.roomidList = config.medalTasks.roomidList.filter((roomid) =>
-      available.has(roomid),
+    config.medalTasks.roomidList = config.medalTasks.roomidList.filter((entry) =>
+      available.has(entry.roomid),
     )
   }
   syncSelection()
