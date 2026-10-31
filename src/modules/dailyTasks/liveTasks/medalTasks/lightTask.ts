@@ -316,6 +316,7 @@ class LightTask extends MedalModule {
 
       candidates.push({
         roomid,
+        uid: medal.medal.target_id,
         nick_name,
         medal_name: medal.medal.medal_name,
         avatar: medal.anchor_info.avatar,

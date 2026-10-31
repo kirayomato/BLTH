@@ -24,6 +24,8 @@ type MedalsByLivingStatus = Record<LiveStatus, LiveData.FansMedalPanel.List[]>
 /** 手动点赞时可选择的直播间 */
 interface LikeRoomCandidate {
   roomid: number
+  /** 主播 UID */
+  uid: number
   nick_name: string
   medal_name: string
   avatar: string

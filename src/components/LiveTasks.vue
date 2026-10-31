@@ -15,6 +15,8 @@ interface MedalRow {
   medal_name: string
   medal_level: number
   roomid: number
+  /** 主播 UID */
+  uid: number
   /** 粉丝勋章是否已点亮 */
   is_lighted: boolean
   /** 账号是否已注销 */
@@ -116,6 +118,7 @@ const allMedalRows = computed<MedalRow[]>(() =>
       medal_name: medal.medal.medal_name,
       medal_level: medal.medal.level,
       roomid: medal.room_info.room_id,
+      uid: medal.medal.target_id,
       is_lighted: medal.medal.is_lighted === 1,
       is_canceled,
     }
@@ -159,7 +162,7 @@ const medalTableData = computed<MedalRow[]>({
     }
   },
 })
-/** 窗口内搜索关键字（昵称 / 粉丝勋章 / 房间号），只影响显示 */
+/** 窗口内搜索关键字（昵称 / 粉丝勋章 / 房间号 / UID），只影响显示 */
 const medalSearchText = ref<string>('')
 /** 窗口内筛选条件，只影响显示 */
 const medalFilter = ref<'all' | 'lighted' | 'unlighted' | 'checked' | 'unchecked'>('all')
@@ -177,7 +180,8 @@ const filteredMedalRows = computed<MedalRow[]>(() => {
       (row) =>
         row.nick_name.toLowerCase().includes(keyword) ||
         row.medal_name.toLowerCase().includes(keyword) ||
-        String(row.roomid).includes(keyword),
+        String(row.roomid).includes(keyword) ||
+        String(row.uid).includes(keyword),
     )
   }
   if (medalFilter.value === 'lighted' || medalFilter.value === 'unlighted') {
@@ -643,7 +647,7 @@ watch(
         <el-col :span="11">
           <el-input
             v-model="medalSearchText"
-            placeholder="搜索昵称 / 粉丝勋章 / 房间号"
+            placeholder="搜索昵称 / 粉丝勋章 / 房间号 / UID"
             clearable
             :prefix-icon="Search"
           />
@@ -808,6 +812,19 @@ watch(
               </el-link>
             </template>
           </el-table-column>
+          <el-table-column prop="uid" label="UID" width="120" :sortable="medalTableSortable">
+            <template #default="scope">
+              <el-link
+                :href="'https://space.bilibili.com/' + scope.row.uid"
+                rel="noreferrer"
+                type="primary"
+                target="_blank"
+                @click.stop
+              >
+                {{ scope.row.uid }}
+              </el-link>
+            </template>
+          </el-table-column>
         </el-table>
       </VueDraggable>
       <template #footer>
@@ -879,6 +896,11 @@ watch(
 
 .filter-bar {
   margin-bottom: 8px;
+}
+
+/* 窗口内搜索提示文字用小字号，输入内容字号不变 */
+.filter-bar :deep(.el-input__inner::placeholder) {
+  font-size: 12px;
 }
 
 .filter-hint {
