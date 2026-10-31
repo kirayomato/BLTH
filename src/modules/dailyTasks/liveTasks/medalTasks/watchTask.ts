@@ -280,7 +280,7 @@ class WatchTask extends MedalModule {
         && (
           this.PUBLIC_MEDAL_FILTERS.whiteBlackList(medal)
           && (this.medalTasksConfig.roomidList2.some((entry) => entry.roomid === medal.room_info.room_id)
-            || medal.medal.level < 20)
+            || medal.medal.level < 15)
         )
     );
     result.sort(this.sort_live_medals);

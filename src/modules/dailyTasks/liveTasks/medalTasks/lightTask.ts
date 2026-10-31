@@ -69,7 +69,8 @@ class LightTask extends MedalModule {
         &&
         (
           this.MEDAL_FILTERS.livingStatus(medal) == "on" ||
-          this.medalTasksConfig.roomidList2.some((entry) => entry.roomid === medal.room_info.room_id)
+          this.medalTasksConfig.roomidList2.some((entry) => entry.roomid === medal.room_info.room_id) || 
+          medal.medal.level < 15
         )
     );
     idlist.forEach((medal) => {

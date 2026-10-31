@@ -99,15 +99,6 @@ class MedalModule extends BaseModule {
   }
 
   sort_live_medals = (a: LiveData.FansMedalPanel.List, b: LiveData.FansMedalPanel.List) => {
-    const roomid2 = this.medalTasksConfig.roomidList2
-    const indexA = roomid2.findIndex((entry) => entry.roomid === a.room_info.room_id)
-    const indexB = roomid2.findIndex((entry) => entry.roomid === b.room_info.room_id)
-    if (indexA >= 0 && indexB >= 0)
-      return indexA - indexB;
-    else if (indexA >= 0)
-      return -1;
-    else if (indexB >= 0)
-      return 1;
     // - 返回 **负数**：a 放前面
     // - 返回 **正数**：b 放前面
     // - 返回 **0**：顺序不变
@@ -118,6 +109,15 @@ class MedalModule extends BaseModule {
       flag = b.medal.level - a.medal.level;
     if (Math.min(a.medal.level, b.medal.level) <= 15)
       return -flag
+    const roomid2 = this.medalTasksConfig.roomidList2
+    const indexA = roomid2.findIndex((entry) => entry.roomid === a.room_info.room_id)
+    const indexB = roomid2.findIndex((entry) => entry.roomid === b.room_info.room_id)
+    if (indexA >= 0 && indexB >= 0)
+      return indexA - indexB;
+    else if (indexA >= 0)
+      return -1;
+    else if (indexB >= 0)
+      return 1;
     return flag
   };
 
