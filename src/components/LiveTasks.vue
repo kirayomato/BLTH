@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useModuleStore, useBiliStore, useUIStore } from '@/stores'
 import { Check, Edit, Delete, Rank, Search, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
@@ -303,12 +303,103 @@ const resetOrder = () => {
   )
 }
 
+/** 名单窗口宽度：未拖拽过时是模式默认值（%），拖拽后固定为像素宽 */
+const medalInfoPanelWidth = ref<string>('65%')
+/** 用户是否已拖拽过窗口宽度（拖过后打开窗口不再恢复模式默认宽度） */
+const medalPanelWidthCustomized = ref(false)
+
+/** 打开窗口时给默认宽度（用户拖拽过则保持不动） */
+const applyDefaultPanelWidth = () => {
+  if (medalPanelWidthCustomized.value) return
+  medalInfoPanelWidth.value = isLikeMode.value ? '85%' : '65%'
+}
+
+/** 是否正在拖拽窗口宽度（防止 pointerdown 与 mousedown 重复进入） */
+let panelResizing = false
+
+/**
+ * 按住窗口右侧拖拽条左右拖动调整窗口宽度
+ *
+ * 拖拽条挂在窗口边框上（内外各占一半），常态可见，方便直接抓住窗口边缘拖动。
+ *
+ * 实现上刻意不依赖组件的事件绑定与冒泡：
+ * - 拖拽入口在 document 的**捕获阶段**监听，pointerdown / mousedown 任意一个先到就开拖，
+ *   页面里其他代码 stopPropagation 也拦不住；
+ * - 移动和松开同样监听 pointermove/mousemove、pointerup/mouseup 两套事件，
+ *   两套都到达时按同一公式计算，结果一致，不会互相干扰；
+ * - 宽度同时写内联 CSS 变量 `--el-dialog-width` 与内联 `width`，不依赖 element-plus 版本细节。
+ */
+const startPanelResize = (e: MouseEvent | PointerEvent, handleEl: HTMLElement) => {
+  if (panelResizing) return
+  const dialogEl = handleEl.closest('.el-dialog') as HTMLElement | null
+  if (!dialogEl) return
+
+  // 不在 pointerdown 上 preventDefault：那会让浏览器抑制随后的 mousedown/mousemove，
+  // 万一某个环境下指针事件不正常，鼠标事件这条后路也就废了。
+  // 拖拽期间靠 user-select: none 阻止选中即可。
+  panelResizing = true
+
+  const startX = e.clientX
+  const startWidth = dialogEl.getBoundingClientRect().width
+  const minWidth = 480
+  const maxWidth = Math.max(minWidth, window.innerWidth - 40)
+
+  const onMove = (ev: MouseEvent | PointerEvent) => {
+    const clamped = Math.min(Math.max(startWidth + ev.clientX - startX, minWidth), maxWidth)
+    const px = `${Math.round(clamped)}px`
+    // 直接写样式，拖动过程立即生效
+    dialogEl.style.setProperty('--el-dialog-width', px)
+    dialogEl.style.width = px
+    // 同步到状态，下次打开窗口时沿用
+    medalInfoPanelWidth.value = px
+    medalPanelWidthCustomized.value = true
+  }
+
+  const onUp = () => {
+    panelResizing = false
+    document.removeEventListener('pointermove', onMove, true)
+    document.removeEventListener('mousemove', onMove, true)
+    document.removeEventListener('pointerup', onUp, true)
+    document.removeEventListener('mouseup', onUp, true)
+    document.removeEventListener('pointercancel', onUp, true)
+    document.body.style.removeProperty('user-select')
+    document.body.style.removeProperty('cursor')
+  }
+
+  document.addEventListener('pointermove', onMove, true)
+  document.addEventListener('mousemove', onMove, true)
+  document.addEventListener('pointerup', onUp, true)
+  document.addEventListener('mouseup', onUp, true)
+  document.addEventListener('pointercancel', onUp, true)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ew-resize'
+}
+
+/** 捕获阶段识别「按在拖拽条上」，开拖 */
+const handlePanelResizePointerDown = (e: MouseEvent | PointerEvent) => {
+  const target = e.target as HTMLElement | null
+  const handleEl = target?.closest?.('.panel-resize-handle') as HTMLElement | null
+  if (handleEl) startPanelResize(e, handleEl)
+}
+
+onMounted(() => {
+  // 捕获阶段监听，先于页面上任何冒泡处理，且不依赖模板上的事件绑定
+  document.addEventListener('pointerdown', handlePanelResizePointerDown, true)
+  document.addEventListener('mousedown', handlePanelResizePointerDown, true)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handlePanelResizePointerDown, true)
+  document.removeEventListener('mousedown', handlePanelResizePointerDown, true)
+})
+
 /**
  * 打开名单窗口
  * @param mode 窗口用途：编辑黑白名单 / 编辑优先名单
  */
 const openMedalPanel = async (mode: 'list' | 'priority') => {
   medalInfoPanelMode.value = mode
+  applyDefaultPanelWidth()
   resetMedalFilters()
   medalInfoPanelVisible.value = true
 
@@ -436,6 +527,7 @@ const handleManualLike = async () => {
     likeSelection.value = likeCandidates.value.filter((row) => !row.reachFreeIntimacyLimit)
 
     medalInfoPanelMode.value = 'like'
+    applyDefaultPanelWidth()
     resetMedalFilters()
     medalInfoPanelVisible.value = true
 
@@ -634,8 +726,10 @@ watch(
       "
       :lock-scroll="false"
       :close-on-click-modal="!isLikeMode"
-      :width="isLikeMode ? '85%' : '65%'"
+      :width="medalInfoPanelWidth"
     >
+      <!-- 右缘拖拽条：按住左右拖动调整窗口宽度（拖拽入口在 document 捕获阶段统一监听） -->
+      <div class="panel-resize-handle" title="拖拽调整窗口宽度"></div>
       <el-text v-if="isLikeMode" type="info" class="panel-summary">
         共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（上限
         {{ likeDailyLimit }}，未点亮勋章的点赞不计数、不受限）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。
@@ -905,6 +999,27 @@ watch(
 
 .filter-hint {
   margin-right: 8px;
+}
+
+/* 窗口右缘拖拽条：贴在窗口边框上（内外各占一半），常态可见便于直接抓住窗口边缘拖动 */
+.panel-resize-handle {
+  position: absolute;
+  top: 0;
+  /* 跨在窗口边框上：负偏移让一半露在边框外 */
+  right: -6px;
+  bottom: 0;
+  z-index: 3;
+  width: 12px;
+  cursor: ew-resize;
+  background: var(--el-color-primary-light-7);
+  border-right: 2px solid var(--el-color-primary-light-5);
+  border-radius: 0 4px 4px 0;
+  transition: background-color 0.15s;
+}
+
+.panel-resize-handle:hover {
+  background: var(--el-color-primary-light-3);
+  border-right-color: var(--el-color-primary);
 }
 
 .cancelled-tag {
