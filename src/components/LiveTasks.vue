@@ -5,17 +5,20 @@ import { Check, Edit, Delete, Rank, Search, Star } from '@element-plus/icons-vue
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import helpInfo from '@/library/help-info'
 import { VueDraggable } from 'vue-draggable-plus'
-import { arrayToMap } from '@/library/utils'
+import { arrayToMap, CANCELLED_NICK_NAME } from '@/library/utils'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 
 interface MedalRow {
   avatar: string
+  /** 昵称；账号已注销的显示保留的原名，原名为空则显示「账号已注销」 */
   nick_name: string
   medal_name: string
   medal_level: number
   roomid: number
   /** 粉丝勋章是否已点亮 */
   is_lighted: boolean
+  /** 账号是否已注销 */
+  is_canceled: boolean
   /** 亲密度储蓄值，仅点赞流程收集过 */
   freeIntimacy?: number | null
   /** 亲密度储蓄是否已满，仅点赞流程收集过 */
@@ -90,16 +93,33 @@ const medalInfoPanelMode = ref<'list' | 'like' | 'priority'>('list')
 const isLikeMode = computed(() => medalInfoPanelMode.value === 'like')
 const isPriorityMode = computed(() => medalInfoPanelMode.value === 'priority')
 
-/** 粉丝勋章名单的完整数据（不受排序模式影响），优先名单窗口直接用这一份 */
+/** 名单里已保存的用户名（key：直播间号），账号已注销时用它显示原名 */
+const storedNameByRoomid = computed<Map<number, string>>(() => {
+  const map = new Map<number, string>()
+  for (const entry of [...config.medalTasks.roomidList, ...config.medalTasks.roomidList2]) {
+    if (entry.name && !map.has(entry.roomid)) {
+      map.set(entry.roomid, entry.name)
+    }
+  }
+  return map
+})
+
+/** 粉丝勋章名单的完整数据（不受排序模式影响），优先名单窗口直接用这一份；含账号已注销 */
 const allMedalRows = computed<MedalRow[]>(() =>
-  biliStore.filteredFansMedals.map((medal) => ({
-    avatar: medal.anchor_info.avatar,
-    nick_name: medal.anchor_info.nick_name,
-    medal_name: medal.medal.medal_name,
-    medal_level: medal.medal.level,
-    roomid: medal.room_info.room_id,
-    is_lighted: medal.medal.is_lighted === 1,
-  })),
+  biliStore.filteredFansMedals.map((medal) => {
+    const is_canceled = medal.anchor_info.nick_name === CANCELLED_NICK_NAME
+    return {
+      avatar: medal.anchor_info.avatar,
+      nick_name: is_canceled
+        ? storedNameByRoomid.value.get(medal.room_info.room_id) || CANCELLED_NICK_NAME
+        : medal.anchor_info.nick_name,
+      medal_name: medal.medal.medal_name,
+      medal_level: medal.medal.level,
+      roomid: medal.room_info.room_id,
+      is_lighted: medal.medal.is_lighted === 1,
+      is_canceled,
+    }
+  }),
 )
 
 const medalInfoTableData = computed({
@@ -226,7 +246,7 @@ const syncSelection = () => {
 /**
  * 打开窗口时按名单初始化勾选
  *
- * 名单里可能残留已被删除或被过滤的粉丝勋章，勾选前先把没有对应行的直播间号剔除。
+ * 名单里可能残留已被删除或没有真实直播间的粉丝勋章，勾选前先把没有对应行的直播间号剔除。
  */
 const initSelection = () => {
   const available = new Set(allMedalRows.value.map((row) => row.roomid))
@@ -395,7 +415,17 @@ const handleManualLike = async () => {
       return
     }
 
-    likeCandidates.value = snapshot.candidates
+    // LikeRoomCandidate 补齐 MedalRow 的 is_canceled，昵称按名单窗口的规则显示
+    likeCandidates.value = snapshot.candidates.map((row) => {
+      const is_canceled = row.nick_name === CANCELLED_NICK_NAME
+      return {
+        ...row,
+        nick_name: is_canceled
+          ? storedNameByRoomid.value.get(row.roomid) || CANCELLED_NICK_NAME
+          : row.nick_name,
+        is_canceled,
+      }
+    })
     likeTodayLikes.value = snapshot.todayLikes
     likeDailyLimit.value = snapshot.dailyLimit
     // 亲密度储蓄已满的勋章默认不勾选：点赞不再涨亲密度，需要时手动勾上
@@ -691,7 +721,20 @@ watch(
             label="昵称"
             min-width="110"
             :sortable="medalTableSortable"
-          />
+          >
+            <template #default="scope">
+              <span>{{ scope.row.nick_name }}</span>
+              <el-tag
+                v-if="scope.row.is_canceled"
+                type="info"
+                size="small"
+                effect="plain"
+                class="cancelled-tag"
+              >
+                已注销
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column
             prop="medal_name"
             label="粉丝勋章"
@@ -840,6 +883,10 @@ watch(
 
 .filter-hint {
   margin-right: 8px;
+}
+
+.cancelled-tag {
+  margin-left: 4px;
 }
 
 .order-list {

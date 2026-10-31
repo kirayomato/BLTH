@@ -2,7 +2,7 @@ import { useBiliStore, useModuleStore } from '@/stores'
 import BAPI from '@/library/bili-api'
 import type { LiveData } from '@/library/bili-api/data'
 import { delayToNextMoment, isTimestampToday } from '@/library/luxon'
-import { sleep } from '@/library/utils'
+import { sleep, CANCELLED_NICK_NAME } from '@/library/utils'
 import BaseModule from '@/modules/BaseModule'
 import ModuleError from '@/library/error/ModuleError'
 import _ from 'lodash'
@@ -53,6 +53,7 @@ class FansMedals extends BaseModule {
    * 用粉丝勋章数据自动更新房间名单里的用户名
    *
    * 名单允许用户名留空，运行时获取到粉丝勋章后按房间号补全并保持最新；
+   * 账号已注销的保留原名（便于辨认），原名为空才填「账号已注销」；
    * 不在粉丝勋章中的房间保留原名（可能为空）
    *
    * @param medals 刚获取到的粉丝勋章列表
@@ -62,7 +63,14 @@ class FansMedals extends BaseModule {
     const { roomidList, roomidList2 } = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks
     for (const entry of [...roomidList, ...roomidList2]) {
       const name = nameByRoomid.get(entry.roomid)
-      if (name !== undefined && entry.name !== name) {
+      if (name === undefined) {
+        continue
+      }
+      if (name === CANCELLED_NICK_NAME) {
+        if (!entry.name) {
+          entry.name = name
+        }
+      } else if (entry.name !== name) {
         entry.name = name
       }
     }
