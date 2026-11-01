@@ -654,9 +654,15 @@ watch(
     <el-row>
       <el-space wrap :size="[8, 0]">
         <el-switch v-model="config.medalTasks.watch.enabled" active-text="观看直播" />
-        <el-select v-model="config.medalTasks.watch.time" placeholder="Select" style="width: 70px">
-          <el-option v-for="i in 12" :key="i" :label="i * 5" :value="i * 5" />
-        </el-select>
+        <el-input-number
+          v-model="config.medalTasks.watch.time"
+          :min="5"
+          :max="180"
+          :precision="0"
+          :controls="false"
+          :value-on-clear="25"
+          style="width: 80px"
+        />
         <el-text>分钟 / 直播间</el-text>
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.watch" />
         <TaskStatus :status="status.medalTasks.watch" @click="reset.medalTasks.watch" />
