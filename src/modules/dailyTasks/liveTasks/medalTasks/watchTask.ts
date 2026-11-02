@@ -22,6 +22,7 @@ interface SpyderData {
 class RoomHeart {
   constructor(
     roomID: number,
+    uname: string,
     areaID: number,
     parentID: number,
     ruid: number,
@@ -33,6 +34,7 @@ class RoomHeart {
     this.ruid = ruid
     this.watchedSeconds = watchedSeconds
     this.config = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch
+    this.uname = uname
   }
 
   private logger = new Logger('RoomHeart')
@@ -51,6 +53,7 @@ class RoomHeart {
   private readonly roomID: number
   /** 主播的 UID */
   private readonly ruid: number
+  private readonly uname: string
   private seq = 0
   private progress = -1
   /** 计算签名和发送请求时均需要 JSON.stringify */
@@ -173,10 +176,10 @@ class RoomHeart {
         const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看直播满15分钟")
         if (prog != this.progress || this.progress == -1) {
           this.progress = prog;
-          this.logger.log(`${this.roomID} 观看直播进度: ${prog}/${total}`)
+          this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
         }
         if (prog == total) {
-          this.logger.log(`${this.roomID} 观看直播进度已满，观看结束`)
+          this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度已满，观看结束`)
           return;
         }
 
@@ -385,6 +388,7 @@ class WatchTask extends MedalModule {
 
             await new RoomHeart(
               roomid,
+              medal.anchor_info.nick_name,
               area_id,
               parent_area_id,
               uid,
