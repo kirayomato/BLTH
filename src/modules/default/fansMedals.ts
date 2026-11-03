@@ -29,20 +29,24 @@ class FansMedals extends BaseModule {
       for (let page = 2; page <= Math.min(total_page, pages); page++) {
         const response = await BAPI.live.fansMedalPanel(page)
         this.logger.log(`BAPI.live.fansMedalPanel(${page}) response`, response)
-        if (firstPageResponse.code === 0) {
-          fansMedalList.push(...response.data.list)
-        } else {
-          this.logger.error(
-            `获取粉丝勋章列表第${page}页失败，提前结束获取`,
-            firstPageResponse.message,
-          )
-          // 中途出错，返回已获取的粉丝勋章列表，不抛出错误
-          return fansMedalList
+        if (response.code !== 0) {
+          this.logger.error(`获取粉丝勋章列表第${page}页失败，提前结束获取`, response.message)
+          // 中途出错，保留已获取的粉丝勋章列表，不抛出错误
+          break
         }
+        fansMedalList.push(...response.data.list)
         // 防止风控，稍微加点延时
         await sleep(_.random(300, 500))
       }
-      return fansMedalList
+
+      // 服务端分页可能跨页重复或漏条，按房间号去重后与接口报告的总数对账
+      const medals = _.uniqBy(fansMedalList, (m) => m.room_info.room_id)
+      if (medals.length !== firstPageResponse.data.total_number) {
+        this.logger.warn(
+          `粉丝勋章数量与接口报告不一致：实际 ${medals.length}，报告 ${firstPageResponse.data.total_number}`,
+        )
+      }
+      return medals
     } catch (error: any) {
       useBiliStore().fansMedalsStatus = 'error'
       throw new ModuleError(this.moduleName, `获取粉丝勋章列表出错: ${error.message}`)

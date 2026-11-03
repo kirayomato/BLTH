@@ -23,9 +23,18 @@ const getSelfUid = (): number => {
   return biliStore.BilibiliLive?.UID ?? biliStore.userInfo!.mid
 }
 
+/**
+ * 粉丝勋章面板接口的每页条数
+ *
+ * 服务端在 page_size 为 10 时会出现分页错位：第一页为 special_list 预留一个名额后，
+ * 第二页仍跳到下一整页开始，相邻两页之间会漏掉一条勋章；20 及以上不受影响。
+ * 依赖页码换算的地方必须与本常量保持一致。
+ */
+export const MEDAL_PANEL_PAGE_SIZE = 20
+
 const BAPI: BapiMethods = {
   live: {
-    fansMedalPanel: (page, page_size = 10) => {
+    fansMedalPanel: (page, page_size = MEDAL_PANEL_PAGE_SIZE) => {
       // 返回的 room_id 是长号
       return request.live.get('/xlive/app-ucenter/v1/fansMedal/panel', {
         page,

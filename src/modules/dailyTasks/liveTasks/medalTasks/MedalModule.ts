@@ -10,7 +10,7 @@ import type {
 } from './types'
 import { arrayToMap, sleep } from '@/library/utils'
 import type { LiveData } from '@/library/bili-api/data'
-import BAPI from '@/library/bili-api'
+import BAPI, { MEDAL_PANEL_PAGE_SIZE } from '@/library/bili-api'
 import { tsm } from '@/library/luxon'
 import _ from 'lodash'
 
@@ -182,8 +182,8 @@ class MedalModule extends BaseModule {
         }
       }
 
-      // 获取粉丝勋章 API 每页返回 10 个勋章，页码从 1 开始
-      const page = Math.floor(index / 10) + 1
+      // 粉丝勋章接口每页返回的数量由 MEDAL_PANEL_PAGE_SIZE 决定，页码从 1 开始
+      const page = Math.floor(index / MEDAL_PANEL_PAGE_SIZE) + 1
 
       const { status, canTryNextPage } = await this.fetchMedalPageForLiveStatus(page, roomid)
 
