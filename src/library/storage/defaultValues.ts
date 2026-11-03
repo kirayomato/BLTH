@@ -106,6 +106,8 @@ const defaultValues: DefaultValues = {
           watch: {
             enabled: false,
             time: 25,
+            // 默认开启：保持「观看时间分配」的行为，老配置补齐该字段后不受影响
+            autoAllocateTime: true,
             _lastCompleteTime: 0,
           },
           isWhiteList: false,

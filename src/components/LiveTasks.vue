@@ -673,6 +673,11 @@ watch(
           style="width: 80px"
         />
         <el-text>分钟 / 直播间</el-text>
+        <el-switch
+          v-model="config.medalTasks.watch.autoAllocateTime"
+          active-text="自动分配时长"
+          :disabled="!config.medalTasks.watch.enabled"
+        />
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.watch" />
         <TaskStatus :status="status.medalTasks.watch" @click="reset.medalTasks.watch" />
       </el-space>

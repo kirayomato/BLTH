@@ -11,6 +11,7 @@ interface TaskView {
   group: string
   label: string
   enabled: boolean
+  hint?: string
   sub?: boolean
   parent?: string
 }
@@ -239,7 +240,7 @@ async function runLike(): Promise<void> {
   <div class="page">
     <header class="header">
       <h1>BLTH 配置</h1>
-      <p class="hint">此处只调整任务开关；任务参数（投币数量、观看时长、弹幕列表、房间名单）请编辑 data/storage.json</p>
+      <p class="hint">此处可调整任务开关与少量开关型参数；其它任务参数（投币数量、观看时长、弹幕列表、房间名单）请编辑 data/storage.json</p>
     </header>
 
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
@@ -349,6 +350,7 @@ async function runLike(): Promise<void> {
           @change="save"
         />
         <span class="label">{{ task.label }}</span>
+        <span v-if="task.hint" class="task-hint">{{ task.hint }}</span>
       </div>
     </el-card>
 
@@ -388,11 +390,17 @@ async function runLike(): Promise<void> {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
   padding: 5px 0;
 }
 
 .row.sub {
   padding-left: 28px;
+}
+
+.task-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .like-table {

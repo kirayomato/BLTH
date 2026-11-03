@@ -19,17 +19,24 @@ interface TaskEntry {
   moduleName: string
   group: string
   label: string
+  /** 展示在开关右侧的补充说明，可为空 */
+  hint?: string
   /** 是否为子开关，前端据此缩进并联动主开关的禁用态 */
   sub?: boolean
   /** 子开关所属主开关的 id */
   parent?: string
+  /**
+   * 是否为「参数型」开关：它只影响任务下次运行时的取值，打开时不必顺带重跑一轮模块
+   * （例如点赞开关只是放行手动入口、观看时长分配开关只改变时长计算方式）
+   */
+  param?: boolean
 }
 
 /**
  * 配置页面暴露的开关。
  *
- * 只覆盖任务的启用状态；任务参数（投币数量、观看时长、弹幕列表、房间名单等）
- * 仍由 data/storage.json 维护。
+ * 覆盖任务的启用状态，以及少量「开关型」参数（点赞、发弹幕、观看时长分配）；
+ * 其余任务参数（投币数量、观看时长、弹幕列表、房间名单等）仍由 data/storage.json 维护。
  */
 const TASK_ENTRIES: TaskEntry[] = [
   {
@@ -70,6 +77,7 @@ const TASK_ENTRIES: TaskEntry[] = [
     label: '点赞（在下方手动触发）',
     sub: true,
     parent: 'DailyTasks.LiveTasks.medalTasks.light',
+    param: true,
   },
   {
     path: ['DailyTasks', 'LiveTasks', 'medalTasks', 'light'],
@@ -85,6 +93,17 @@ const TASK_ENTRIES: TaskEntry[] = [
     moduleName: 'DailyTask_LiveTask_WatchTask',
     group: '直播任务',
     label: '观看直播',
+  },
+  {
+    path: ['DailyTasks', 'LiveTasks', 'medalTasks', 'watch'],
+    field: 'autoAllocateTime',
+    moduleName: 'DailyTask_LiveTask_WatchTask',
+    group: '直播任务',
+    label: '自动分配时长',
+    hint: '按到 24:00 的剩余时间均摊给本次要观看的直播间；关闭后每个直播间都看满 storage.json 中设置的时长',
+    sub: true,
+    parent: 'DailyTasks.LiveTasks.medalTasks.watch',
+    param: true,
   },
   {
     path: ['DailyTasks', 'OtherTasks', 'silverToCoin'],
@@ -111,6 +130,7 @@ interface TaskView {
   group: string
   label: string
   enabled: boolean
+  hint?: string
   sub?: boolean
   parent?: string
 }
@@ -139,6 +159,7 @@ function listTasks(): TaskView[] {
     group: entry.group,
     label: entry.label,
     enabled: Boolean(taskTarget(entry)?.[entry.field ?? 'enabled']),
+    hint: entry.hint,
     sub: entry.sub,
     parent: entry.parent,
   }))
@@ -175,8 +196,9 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
   const moduleStore = useModuleStore()
 
   for (const entry of newlyEnabled) {
-    // 点赞已改为手动运行，打开开关只是放行手动入口，不必顺带重跑一轮模块
-    if (entry.field === 'likeEnabled') {
+    // 参数型开关只影响模块后续运行时的取值，不必顺带重跑一轮
+    // （点赞改为手动运行后，打开开关只是放行手动入口）
+    if (entry.param) {
       continue
     }
 

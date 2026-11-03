@@ -354,9 +354,14 @@ class WatchTask extends MedalModule {
         const uid = medal.medal.target_id
         const uname = medal.anchor_info.nick_name
         const [area_id, parent_area_id] = await this.getAreaInfo(medal.room_info.url, roomid)
-        let watchMinutes = Math.min(this.config.time, delayToNextMoment(0, 0).ms / (1000 * 60 * _len))
-        // 向上取整到15的倍数
-        watchMinutes = Math.ceil(watchMinutes / 15) * 15
+        let watchMinutes = this.config.time
+        if (this.config.autoAllocateTime) {
+          // 把到 24:00 之前的剩余时间平均分配给剩余的直播间（_len 为含当前直播间在内的剩余数量），
+          // 单个直播间仍不超过配置时长
+          watchMinutes = Math.min(watchMinutes, delayToNextMoment(0, 0).ms / (1000 * 60 * _len))
+          // 向上取整到15的倍数
+          watchMinutes = Math.ceil(watchMinutes / 15) * 15
+        }
         if (area_id > 0 && parent_area_id > 0) {
           const [prog, total] = await MedalModule.getMissionProgress(uid, "观看")
           if (prog > 0 && prog == total) {

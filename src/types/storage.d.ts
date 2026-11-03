@@ -44,6 +44,8 @@ interface ModuleConfig {
         watch: {
           enabled: boolean
           time: number
+          /** 是否把到 24:00 之前的剩余时间平均分配给剩余的直播间；关闭时每个直播间都看满 time 分钟 */
+          autoAllocateTime: boolean
           _lastCompleteTime: number
         }
         isWhiteList: boolean
