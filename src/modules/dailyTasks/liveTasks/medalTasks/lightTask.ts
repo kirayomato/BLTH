@@ -24,7 +24,7 @@ class LightTask extends MedalModule {
   /** 每个直播间每次点赞的轮数 */
   private static readonly LIKE_ROUNDS = 12
   /** 点赞任务标题 */
-  private static readonly LIKE_MISSION_TITLE = '点赞30次'
+  private static readonly LIKE_MISSION_TITLE = '点赞'
 
   /** 手动点赞是否正在执行，避免重复触发 */
   private manualLikeRunning = false
@@ -69,7 +69,7 @@ class LightTask extends MedalModule {
         &&
         (
           this.MEDAL_FILTERS.livingStatus(medal) == "on" ||
-          this.medalTasksConfig.roomidList2.some((entry) => entry.roomid === medal.room_info.room_id) || 
+          this.medalTasksConfig.roomidList2.some((entry) => entry.roomid === medal.room_info.room_id) ||
           medal.medal.level < 15
         )
     );
@@ -608,7 +608,7 @@ class LightTask extends MedalModule {
           }
           // 未点亮也要请求：顺便刷新点亮状态，只有真的已点亮才需要判断上限
           if (flag !== 0) {
-            const state = await this.fetchMissionState(medal, '发弹幕')
+            const state = await this.fetchMissionState(medal, '弹幕')
             if (state.isLighted) {
               // 已点亮：请求失败 / 解析失败 / 储蓄满 / 已跑满 都跳过
               if (!state.available) {

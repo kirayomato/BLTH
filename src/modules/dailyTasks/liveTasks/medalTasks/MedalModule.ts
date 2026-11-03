@@ -348,7 +348,7 @@ class MedalModule extends BaseModule {
       return [0, 0]
     }
     for (const task of tasks) {
-      if (task.title === title) {
+      if (task.title.includes(title)) {
         const subTitle = task.sub_title
         const regex = /每日上限\s*(\d+)\/(\d+)/
         const match = subTitle?.match(regex)

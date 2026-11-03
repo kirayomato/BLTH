@@ -173,7 +173,7 @@ class RoomHeart {
       if (response.code === 0) {
         this.seq += 1
         this.updateProgress()
-        const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看直播满15分钟")
+        const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看")
         if (prog != this.progress || this.progress == -1) {
           this.progress = prog;
           this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
