@@ -106,8 +106,6 @@ const defaultValues: DefaultValues = {
           watch: {
             enabled: false,
             time: 25,
-            _watchingProgress: {},
-            _lastWatchTime: 0,
             _lastCompleteTime: 0,
           },
           isWhiteList: false,

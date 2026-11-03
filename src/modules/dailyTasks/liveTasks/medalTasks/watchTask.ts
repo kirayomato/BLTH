@@ -1,11 +1,10 @@
-import { delayToNextMoment, isNowIn, isTimestampToday, tsm } from '@/library/luxon'
+import { delayToNextMoment, isNowIn, tsm } from '@/library/luxon'
 import BAPI from '@/library/bili-api'
 import { useBiliStore, useModuleStore, usePlayerStore } from '@/stores'
 import Logger from '@/library/logger'
 import CryptoJS from 'crypto-js'
 import { sleep, uuid } from '@/library/utils'
 import type { ModuleConfig, ModuleStatusTypes, RunAtMoment } from '@/types'
-import _ from 'lodash'
 import MedalModule from '@/modules/dailyTasks/liveTasks/medalTasks/MedalModule'
 import type { LiveData } from '@/library/bili-api/data'
 
@@ -26,13 +25,11 @@ class RoomHeart {
     areaID: number,
     parentID: number,
     ruid: number,
-    watchedSeconds: number,
   ) {
     this.roomID = roomID
     this.areaID = areaID
     this.parentID = parentID
     this.ruid = ruid
-    this.watchedSeconds = watchedSeconds
     this.config = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch
     this.uname = uname
   }
@@ -45,8 +42,8 @@ class RoomHeart {
     useModuleStore().moduleStatus.DailyTasks.LiveTasks.medalTasks.watch = s
   }
 
-  /** 今日当前直播间已观看时间（秒） */
-  private watchedSeconds: number
+  /** 单次运行中当前直播间已观看的时间（秒），达到配置时长即停止 */
+  private watchedSeconds = 0
 
   private readonly areaID: number
   private readonly parentID: number
@@ -59,16 +56,6 @@ class RoomHeart {
   /** 计算签名和发送请求时均需要 JSON.stringify */
   private get id(): number[] {
     return [this.parentID, this.areaID, this.seq, this.roomID]
-  }
-
-  /** 更新当前直播间的观看任务进度 */
-  private updateProgress() {
-    // 记录观看时间
-    this.watchedSeconds += this.heartBeatInterval
-
-    useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch._watchingProgress[
-      this.roomID
-    ] = this.watchedSeconds
   }
 
   /** Cookie LIVE_BUVID */
@@ -95,7 +82,6 @@ class RoomHeart {
       this.logger.error(`缺少buvid，无法为直播间 ${this.roomID} 执行观看直播任务，请尝试刷新页面`)
       return Promise.resolve()
     }
-    this.watchedSeconds = 0
     return this.E()
   }
 
@@ -172,7 +158,7 @@ class RoomHeart {
       )
       if (response.code === 0) {
         this.seq += 1
-        this.updateProgress()
+        this.watchedSeconds += this.heartBeatInterval
         const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看")
         if (prog != this.progress || this.progress == -1) {
           this.progress = prog;
@@ -344,17 +330,6 @@ class WatchTask extends MedalModule {
 
     this.status = 'running'
 
-    if (!isTimestampToday(this.config._lastWatchTime, 0, 0)) {
-      // 如果上次观看（不是完成任务）的时间戳不在今天，将今天已观看的秒数置为0
-      this.config._watchingProgress = {}
-    } else {
-      // 因为连续看 5 分钟（300秒）才能加亲密度，所以上一次观看时最后不足 5 分钟的时间是无效的
-      _.forOwn(this.config._watchingProgress, (value, key, object) => {
-        object[key] -= value % 300
-      })
-    }
-
-    this.config._lastWatchTime = tsm()
     const fansMedals = this.getMedals()
 
     if (fansMedals.length > 0) {
@@ -377,24 +352,17 @@ class WatchTask extends MedalModule {
 
         if (area_id > 0 && parent_area_id > 0) {
           // area_id 和 parent_area_id 都大于 0，说明直播间设置了分区，心跳有效
-          if (
-            !this.config._watchingProgress[roomid] ||
-            this.config._watchingProgress[roomid] < this.config.time * 60
-          ) {
-            // 今日观看时间未达到设置值，开始心跳
-            this.logger.log(
-              `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${medal.anchor_info.nick_name}】，UID：${uid}）的观看直播任务`,
-            )
+          this.logger.log(
+            `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${medal.anchor_info.nick_name}】，UID：${uid}）的观看直播任务`,
+          )
 
-            await new RoomHeart(
-              roomid,
-              medal.anchor_info.nick_name,
-              area_id,
-              parent_area_id,
-              uid,
-              this.config._watchingProgress[roomid] ?? 0,
-            ).start()
-          }
+          await new RoomHeart(
+            roomid,
+            medal.anchor_info.nick_name,
+            area_id,
+            parent_area_id,
+            uid,
+          ).start()
         }
       }
 

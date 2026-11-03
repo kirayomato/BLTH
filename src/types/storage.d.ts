@@ -44,8 +44,6 @@ interface ModuleConfig {
         watch: {
           enabled: boolean
           time: number
-          _watchingProgress: Record<string, number>
-          _lastWatchTime: number
           _lastCompleteTime: number
         }
         isWhiteList: boolean
