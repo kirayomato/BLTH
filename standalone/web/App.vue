@@ -166,6 +166,16 @@ async function loadLikeCandidates(): Promise<void> {
       return
     }
 
+    // 默认顺序：默认勾选的排在前，同组内按勋章等级降序
+    const defaultCheckedRoomids = new Set(
+      likeCandidates.value.filter((row) => !row.reachFreeIntimacyLimit).map((row) => row.roomid),
+    )
+    likeCandidates.value.sort(
+      (a, b) =>
+        Number(defaultCheckedRoomids.has(b.roomid)) - Number(defaultCheckedRoomids.has(a.roomid)) ||
+        b.medal_level - a.medal_level,
+    )
+
     // 默认全选，用户再按需去掉不想点赞的房间；亲密度储蓄已满的默认不勾选
     await nextTick()
     likeCandidates.value

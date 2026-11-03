@@ -511,7 +511,7 @@ const handleManualLike = async () => {
     }
 
     // LikeRoomCandidate 补齐 MedalRow 的 is_canceled，昵称按名单窗口的规则显示
-    likeCandidates.value = snapshot.candidates.map((row) => {
+    const candidates = snapshot.candidates.map((row) => {
       const is_canceled = row.nick_name === CANCELLED_NICK_NAME
       return {
         ...row,
@@ -524,7 +524,14 @@ const handleManualLike = async () => {
     likeTodayLikes.value = snapshot.todayLikes
     likeDailyLimit.value = snapshot.dailyLimit
     // 亲密度储蓄已满的勋章默认不勾选：点赞不再涨亲密度，需要时手动勾上
-    likeSelection.value = likeCandidates.value.filter((row) => !row.reachFreeIntimacyLimit)
+    likeSelection.value = candidates.filter((row) => !row.reachFreeIntimacyLimit)
+    // 默认顺序：已勾选的排在前，同组内按勋章等级降序
+    const checkedRoomids = new Set(likeSelection.value.map((row) => row.roomid))
+    likeCandidates.value = candidates.sort(
+      (a, b) =>
+        Number(checkedRoomids.has(b.roomid)) - Number(checkedRoomids.has(a.roomid)) ||
+        b.medal_level - a.medal_level,
+    )
 
     medalInfoPanelMode.value = 'like'
     applyDefaultPanelWidth()
@@ -534,6 +541,8 @@ const handleManualLike = async () => {
     // 等对话框加载好后再把勾选状态同步到表格
     await nextTick()
     medalInfoTableRef.value?.clearSelection()
+    // 表头排序状态会保留到下次打开，先清掉才能回落到默认顺序
+    medalInfoTableRef.value?.clearSort()
     syncSelection()
   } catch (error) {
     ElMessage.error(`获取可点赞直播间失败：${(error as Error).message}`)
