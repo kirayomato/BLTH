@@ -25,6 +25,7 @@ class RoomHeart {
     areaID: number,
     parentID: number,
     ruid: number,
+    watchMinutes: number
   ) {
     this.roomID = roomID
     this.areaID = areaID
@@ -32,11 +33,13 @@ class RoomHeart {
     this.ruid = ruid
     this.config = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch
     this.uname = uname
+    this.watchMinutes = watchMinutes
   }
 
   private logger = new Logger('RoomHeart')
 
   private config: ModuleConfig['DailyTasks']['LiveTasks']['medalTasks']['watch']
+  private watchMinutes: number
 
   set status(s: ModuleStatusTypes) {
     useModuleStore().moduleStatus.DailyTasks.LiveTasks.medalTasks.watch = s
@@ -160,16 +163,17 @@ class RoomHeart {
         this.seq += 1
         this.watchedSeconds += this.heartBeatInterval
         const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看")
-        if (prog != this.progress || this.progress == -1) {
-          this.progress = prog;
-          this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
+        if (total > 0) {
+          if (prog != this.progress) {
+            this.progress = prog;
+            this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
+          }
+          if (prog == total) {
+            this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度已满，观看结束`)
+            return;
+          }
         }
-        if (prog == total) {
-          this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度已满，观看结束`)
-          return;
-        }
-
-        if (this.watchedSeconds >= this.config.time * 60) {
+        if (this.watchedSeconds >= this.watchMinutes * 60) {
           return;
         }
         ; ({
@@ -331,8 +335,8 @@ class WatchTask extends MedalModule {
     this.status = 'running'
 
     const fansMedals = this.getMedals()
-
-    if (fansMedals.length > 0) {
+    let _len = fansMedals.length
+    if (_len > 0) {
       let i: number
 
       for (i = 0; i < fansMedals.length; i++) {
@@ -348,22 +352,32 @@ class WatchTask extends MedalModule {
         const medal = fansMedals[i]
         const roomid = medal.room_info.room_id
         const uid = medal.medal.target_id
+        const uname = medal.anchor_info.nick_name
         const [area_id, parent_area_id] = await this.getAreaInfo(medal.room_info.url, roomid)
-
+        let watchMinutes = Math.min(this.config.time, delayToNextMoment(0, 0).ms / (1000 * 60 * _len))
+        // 向上取整到15的倍数
+        watchMinutes = Math.ceil(watchMinutes / 15) * 15
         if (area_id > 0 && parent_area_id > 0) {
+          const [prog, total] = await MedalModule.getMissionProgress(uid, "观看")
+          if (prog > 0 && prog == total) {
+            this.logger.log(`${uname}(${roomid}) 观看直播进度已满，${prog}/${total}`)
+            continue;
+          }
           // area_id 和 parent_area_id 都大于 0，说明直播间设置了分区，心跳有效
           this.logger.log(
-            `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${medal.anchor_info.nick_name}】，UID：${uid}）的观看直播任务`,
+            `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${uname}】，UID：${uid}）的观看直播任务，本次观看时间上限: ${watchMinutes}分钟`,
           )
 
           await new RoomHeart(
             roomid,
-            medal.anchor_info.nick_name,
+            uname,
             area_id,
             parent_area_id,
             uid,
+            watchMinutes
           ).start()
         }
+        _len--
       }
 
       if (i === fansMedals.length) {
