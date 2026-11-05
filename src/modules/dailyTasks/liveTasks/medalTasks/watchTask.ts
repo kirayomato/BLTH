@@ -25,7 +25,8 @@ class RoomHeart {
     areaID: number,
     parentID: number,
     ruid: number,
-    watchMinutes: number
+    watchMinutes: number,
+    initialProgress: number
   ) {
     this.roomID = roomID
     this.areaID = areaID
@@ -34,18 +35,29 @@ class RoomHeart {
     this.config = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch
     this.uname = uname
     this.watchMinutes = watchMinutes
+    this.initialProgress = initialProgress
+    // 15分钟折算1点进度
+    this.targetProgress = watchMinutes / 15
+    // 未达到目标进度时，最多观看规划时长+15分钟
+    this.maxWatchSeconds = (watchMinutes + 15) * 60
   }
 
   private logger = new Logger('RoomHeart')
 
   private config: ModuleConfig['DailyTasks']['LiveTasks']['medalTasks']['watch']
   private watchMinutes: number
+  /** 本次观看开始前的进度，目标进度按本次观看的新增量计算 */
+  private readonly initialProgress: number
+  /** 本次观看所需达成的进度增量，由观看时长折算（15分钟1点），达到即停止观看 */
+  private readonly targetProgress: number
+  /** 观看时长上限（秒），未达到目标进度时最多观看规划时长+15分钟 */
+  private readonly maxWatchSeconds: number
 
   set status(s: ModuleStatusTypes) {
     useModuleStore().moduleStatus.DailyTasks.LiveTasks.medalTasks.watch = s
   }
 
-  /** 单次运行中当前直播间已观看的时间（秒），达到配置时长即停止 */
+  /** 单次运行中当前直播间已观看的时间（秒），达到时长上限即停止 */
   private watchedSeconds = 0
 
   private readonly areaID: number
@@ -163,18 +175,23 @@ class RoomHeart {
         this.seq += 1
         this.watchedSeconds += this.heartBeatInterval
         const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看")
-        if (total > 0) {
-          if (prog != this.progress) {
-            this.progress = prog;
-            this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
-          }
-          if (prog == total) {
-            this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度已满，观看结束`)
-            return;
-          }
+        if (total <= 0) {
+          this.logger.log(`${this.uname}(${this.roomID}) 获取不到观看直播进度，结束观看`)
+          return
         }
-        if (this.watchedSeconds >= this.watchMinutes * 60) {
-          return;
+        if (prog != this.progress) {
+          this.progress = prog;
+          this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
+        }
+        const gained = prog - this.initialProgress
+        if (gained >= this.targetProgress || prog >= total) {
+          this.logger.log(
+            `${this.uname}(${this.roomID}) 本次观看进度已达标(新增 ${gained}, 当前 ${prog}/${total}, 目标 ${this.targetProgress})，观看结束`,
+          )
+          return
+        }
+        if (this.watchedSeconds >= this.maxWatchSeconds) {
+          return
         }
         ; ({
           heartbeat_interval: this.heartBeatInterval,
@@ -359,18 +376,23 @@ class WatchTask extends MedalModule {
           // 把到 24:00 之前的剩余时间平均分配给剩余的直播间（_len 为含当前直播间在内的剩余数量），
           // 单个直播间仍不超过配置时长
           watchMinutes = Math.min(watchMinutes, delayToNextMoment(0, 0).ms / (1000 * 60 * _len))
-          // 向上取整到15的倍数
-          watchMinutes = Math.ceil(watchMinutes / 15) * 15
         }
+        // 向上取整到15的倍数
+        watchMinutes = Math.ceil(watchMinutes / 15) * 15
         if (area_id > 0 && parent_area_id > 0) {
           const [prog, total] = await MedalModule.getMissionProgress(uid, "观看")
-          if (prog > 0 && prog == total) {
+          const targetProgress = watchMinutes / 15
+          if (total <= 0) {
+            this.logger.log(`${uname}(${roomid}) 获取不到观看直播进度，跳过该直播间`)
+            continue
+          }
+          if (prog >= total) {
             this.logger.log(`${uname}(${roomid}) 观看直播进度已满，${prog}/${total}`)
-            continue;
+            continue
           }
           // area_id 和 parent_area_id 都大于 0，说明直播间设置了分区，心跳有效
           this.logger.log(
-            `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${uname}】，UID：${uid}）的观看直播任务，本次观看时间上限: ${watchMinutes}分钟`,
+            `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${uname}】，UID：${uid}）的观看直播任务，本次目标进度: +${targetProgress}，当前进度: ${prog}/${total}，设定观看时间: ${watchMinutes}分钟`,
           )
 
           await new RoomHeart(
@@ -379,7 +401,8 @@ class WatchTask extends MedalModule {
             area_id,
             parent_area_id,
             uid,
-            watchMinutes
+            watchMinutes,
+            prog
           ).start()
         }
         _len--
