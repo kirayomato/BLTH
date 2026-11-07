@@ -174,7 +174,18 @@ class RoomHeart {
       if (response.code === 0) {
         this.seq += 1
         this.watchedSeconds += this.heartBeatInterval
-        const [prog, total] = await MedalModule.getMissionProgress(this.ruid, "观看")
+        const state = await MedalModule.queryMissionState(this.ruid, '观看')
+        if (!state.available) {
+          this.logger.warn(`${this.uname}(${this.roomID}) 勋章信息获取失败，结束观看`)
+          return
+        }
+        if (state.reachFreeIntimacyLimit) {
+          this.logger.log(
+            `${this.uname}(${this.roomID}) 亲密度储蓄已满（${state.freeIntimacy}），结束观看`,
+          )
+          return
+        }
+        const { prog, total } = state
         if (total <= 0) {
           this.logger.log(`${this.uname}(${this.roomID}) 获取不到观看直播进度，结束观看`)
           return
@@ -352,8 +363,7 @@ class WatchTask extends MedalModule {
     this.status = 'running'
 
     const fansMedals = this.getMedals()
-    let _len = fansMedals.length
-    if (_len > 0) {
+    if (fansMedals.length > 0) {
       let i: number
 
       for (i = 0; i < fansMedals.length; i++) {
@@ -373,15 +383,30 @@ class WatchTask extends MedalModule {
         const [area_id, parent_area_id] = await this.getAreaInfo(medal.room_info.url, roomid)
         let watchMinutes = this.config.time
         if (this.config.autoAllocateTime) {
-          // 把到 24:00 之前的剩余时间平均分配给剩余的直播间（_len 为含当前直播间在内的剩余数量），
-          // 单个直播间仍不超过配置时长
-          watchMinutes = Math.min(watchMinutes, delayToNextMoment(0, 0).ms / (1000 * 60 * _len))
+          // 把到 24:00 之前的剩余时间平均分配给剩余的直播间（含当前直播间在内的剩余数量），
+          // 单个直播间仍不超过配置时长；按索引计算，跳过直播间不影响后续分配
+          const remainingRooms = fansMedals.length - i
+          watchMinutes = Math.min(
+            watchMinutes,
+            delayToNextMoment(0, 0).ms / (1000 * 60 * remainingRooms),
+          )
         }
         // 向上取整到15的倍数
         watchMinutes = Math.ceil(watchMinutes / 15) * 15
         if (area_id > 0 && parent_area_id > 0) {
-          const [prog, total] = await MedalModule.getMissionProgress(uid, "观看")
+          const state = await this.fetchMissionState(medal, '观看')
           const targetProgress = watchMinutes / 15
+          if (!state.available) {
+            this.logger.warn(`${uname}(${roomid}) 勋章信息获取失败，跳过该直播间`)
+            continue
+          }
+          if (state.reachFreeIntimacyLimit) {
+            this.logger.log(
+              `${uname}(${roomid}) 亲密度储蓄已满（${state.freeIntimacy}），跳过该直播间`,
+            )
+            continue
+          }
+          const { prog, total } = state
           if (total <= 0) {
             this.logger.log(`${uname}(${roomid}) 获取不到观看直播进度，跳过该直播间`)
             continue
@@ -405,7 +430,6 @@ class WatchTask extends MedalModule {
             prog
           ).start()
         }
-        _len--
       }
 
       if (i === fansMedals.length) {

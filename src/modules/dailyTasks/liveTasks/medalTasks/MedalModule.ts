@@ -7,6 +7,7 @@ import type {
   LiveStatusSnapshot,
   RequestQueueKey,
   ActivatedMedalSummary,
+  MedalMissionState,
 } from './types'
 import { arrayToMap, sleep } from '@/library/utils'
 import type { LiveData } from '@/library/bili-api/data'
@@ -362,19 +363,81 @@ class MedalModule extends BaseModule {
   }
 
   /**
-   * 获取指定任务的进度
+   * 查询指定主播的任务进度
+   *
+   * 进度、点亮状态与亲密度储蓄来自同一次 `GetActivatedMedalInfo` 请求。
+   * 与 `parseMissionProgress` 直接解析任务列表不同，这里把「请求失败」与
+   * 「亲密度储蓄已满」保留为独立字段，调用方才能区分该跳过还是该停止。
    *
    * @param targetId 主播的 UID
    * @param title 任务标题
-   * @returns [当前进度, 总进度]；任务信息不可用时返回 [0, 0]
+   * @returns 任务状态；请求失败时 `available` 为 false，进度为 0
    */
-  static async getMissionProgress(targetId: number, title: string): Promise<[number, number]> {
+  static async queryMissionState(targetId: number, title: string): Promise<MedalMissionState> {
     const summary = await MedalModule.getActivatedMedalSummary(targetId)
-    // 亲密度储蓄已满时无法继续做任务，保持原有的「无进度」语义
-    if (!summary || summary.reachFreeIntimacyLimit) {
-      return [0, 0]
+    if (!summary) {
+      return {
+        available: false,
+        isLighted: false,
+        freeIntimacy: null,
+        reachFreeIntimacyLimit: false,
+        prog: 0,
+        total: 0,
+      }
     }
-    return MedalModule.parseMissionProgress(summary.tasks, title)
+    const [prog, total] = MedalModule.parseMissionProgress(summary.tasks, title)
+    return {
+      available: true,
+      isLighted: summary.isLighted,
+      freeIntimacy: summary.freeIntimacy,
+      reachFreeIntimacyLimit: summary.reachFreeIntimacyLimit,
+      prog,
+      total,
+    }
+  }
+
+  /**
+   * 用接口返回的点亮状态刷新勋章快照
+   *
+   * fansMedals 是启动时的快照，运行中勋章可能被点亮（此后受每日上限约束）
+   * 或熄灭（需要重新点赞点亮）。这里把最新状态写回 store 中的勋章对象，
+   * 后续所有判断（含控制面板的「已点亮/未点亮」标签）都会跟着更新。
+   *
+   * @param medal 粉丝勋章
+   * @param isLighted 接口返回的是否已点亮
+   * @returns 刷新后的点亮状态
+   */
+  protected syncLightState(medal: LiveData.FansMedalPanel.List, isLighted: boolean): boolean {
+    const before = medal.medal.is_lighted === 1
+    if (before !== isLighted) {
+      medal.medal.is_lighted = isLighted ? 1 : 0
+      this.logger.log(
+        `${medal.anchor_info.nick_name} 点亮状态已更新: ${before ? '已点亮' : '未点亮'} → ${isLighted ? '已点亮' : '未点亮'}`,
+      )
+    }
+    return isLighted
+  }
+
+  /**
+   * 获取任务进度，并顺便刷新点亮状态
+   *
+   * 进度与点亮状态来自同一次 `GetActivatedMedalInfo` 请求，拿到响应后立刻把
+   * `is_lighted` 写回勋章快照，不会为了更新点亮状态额外发请求。
+   *
+   * @param medal 粉丝勋章
+   * @param title 任务标题
+   * @returns 任务状态；请求失败时 `available` 为 false，进度为 0
+   */
+  protected async fetchMissionState(
+    medal: LiveData.FansMedalPanel.List,
+    title: string,
+  ): Promise<MedalMissionState> {
+    const state = await MedalModule.queryMissionState(medal.medal.target_id, title)
+    if (!state.available) {
+      // 请求失败时点亮状态只能沿用快照，进度视为不可用
+      return { ...state, isLighted: medal.medal.is_lighted === 1 }
+    }
+    return { ...state, isLighted: this.syncLightState(medal, state.isLighted) }
   }
 }
 

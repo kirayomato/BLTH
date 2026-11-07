@@ -9,7 +9,6 @@ import type {
   LightTaskMedalFilters,
   LikeCandidateSnapshot,
   LikeRoomCandidate,
-  MedalMissionState,
   MedalsByLivingStatus,
 } from './types'
 import type { LiveData } from '@/library/bili-api/data'
@@ -216,68 +215,6 @@ class LightTask extends MedalModule {
    */
   private isLikeLimitReached(totalLikes: number): boolean {
     return totalLikes >= LightTask.DAILY_LIKE_LIMIT
-  }
-
-  /**
-   * 用接口返回的点亮状态刷新勋章快照
-   *
-   * fansMedals 是启动时的快照，运行中勋章可能被点亮（此后点赞计入今日计数）
-   * 或熄灭（需要重新点赞点亮）。这里把最新状态写回 store 中的勋章对象，
-   * 后续所有判断（含控制面板的「已点亮/未点亮」标签）都会跟着更新。
-   *
-   * @param medal 粉丝勋章
-   * @param isLighted 接口返回的是否已点亮
-   * @returns 刷新后的点亮状态
-   */
-  private syncLightState(medal: LiveData.FansMedalPanel.List, isLighted: boolean): boolean {
-    const before = medal.medal.is_lighted === 1
-    if (before !== isLighted) {
-      medal.medal.is_lighted = isLighted ? 1 : 0
-      this.logger.log(
-        `${medal.anchor_info.nick_name} 点亮状态已更新: ${before ? '已点亮' : '未点亮'} → ${isLighted ? '已点亮' : '未点亮'}`,
-      )
-    }
-    return isLighted
-  }
-
-  /**
-   * 获取任务进度，并顺便刷新点亮状态
-   *
-   * 进度与点亮状态来自同一次 `GetActivatedMedalInfo` 请求：
-   * 拿到响应后立刻把 `is_lighted` 写回勋章快照，再解析任务进度，
-   * 不会为了更新点亮状态额外发请求。所有需要判断进度的调用点都走这里。
-   *
-   * @param medal 粉丝勋章
-   * @param title 任务标题
-   * @returns 任务状态；请求失败时 `available` 为 false，进度为 0
-   */
-  private async fetchMissionState(
-    medal: LiveData.FansMedalPanel.List,
-    title: string,
-  ): Promise<MedalMissionState> {
-    const summary = await MedalModule.getActivatedMedalSummary(medal.medal.target_id)
-    if (!summary) {
-      // 请求失败时点亮状态只能沿用快照，进度视为不可用
-      return {
-        available: false,
-        isLighted: medal.medal.is_lighted === 1,
-        freeIntimacy: null,
-        reachFreeIntimacyLimit: false,
-        prog: 0,
-        total: 0,
-      }
-    }
-
-    const isLighted = this.syncLightState(medal, summary.isLighted)
-    const [prog, total] = MedalModule.parseMissionProgress(summary.tasks, title)
-    return {
-      available: true,
-      isLighted,
-      freeIntimacy: summary.freeIntimacy,
-      reachFreeIntimacyLimit: summary.reachFreeIntimacyLimit,
-      prog,
-      total,
-    }
   }
 
   /**
