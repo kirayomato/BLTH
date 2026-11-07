@@ -1,5 +1,6 @@
 import { options, getLogLevel } from './config'
 import { loadCookies } from './cookie'
+import { appendConsoleLog } from './logs'
 
 /**
  * 运行环境适配层。
@@ -107,11 +108,11 @@ function installCookieStore(): void {
 
 /**
  * Node 的 console 不支持 %c，共享代码的日志前缀会把整段样式声明原样打出来，这里过滤掉。
+ *
+ * 顺便把通过等级过滤的输出留一份给日志缓冲：等级决定「记录什么」，页面与日志文件看到的
+ * 内容因此与终端一致。
  */
 function installConsoleFilter(): void {
-  const isStyleRule = (value: unknown): boolean =>
-    typeof value === 'string' && /^\s*(font-|color:|background|padding:|border-radius)/.test(value)
-
   // 等级数值越小越详细；none 为最高，会屏蔽一切输出
   const levelRank: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3, none: 4 }
   const methodRank: Record<string, number> = { debug: 0, log: 1, warn: 2, error: 3 }
@@ -120,19 +121,29 @@ function installConsoleFilter(): void {
     const original = console[method].bind(console)
 
     console[method] = (...args: unknown[]) => {
-      // 低于当前等级的日志直接丢弃，实现日志等级开关
+      // 低于当前等级的日志不记录也不输出，实现日志等级开关
       const threshold = levelRank[getLogLevel()] ?? 1
       if (methodRank[method] < threshold) {
         return
       }
 
-      original(
-        ...args
-          .filter((arg) => !isStyleRule(arg))
-          .map((arg) => (typeof arg === 'string' ? arg.replace(/%c/g, '') : arg)),
-      )
+      const formatted = formatConsoleArgs(args)
+      appendConsoleLog(method === 'log' ? 'info' : method, formatted)
+      original(...formatted)
     }
   }
+}
+
+function isStyleRule(value: unknown): boolean {
+  return (
+    typeof value === 'string' && /^\s*(font-|color:|background|padding:|border-radius)/.test(value)
+  )
+}
+
+function formatConsoleArgs(args: unknown[]): unknown[] {
+  return args
+    .filter((arg) => !isStyleRule(arg))
+    .map((arg) => (typeof arg === 'string' ? arg.replace(/%c/g, '') : arg))
 }
 
 function createElementStub(tagName: string): any {

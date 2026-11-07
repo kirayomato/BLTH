@@ -4,6 +4,8 @@ import Logger from '@/library/logger'
 import { useModuleStore } from '@/stores'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import { getLogLevel, isLogLevel, options, setLogLevel, type LogLevel } from './config'
+import { isPlainObject, overwriteConfig } from './config-merge'
+import { getLogRecords, logFilePath, logSession } from './logs'
 import { runModule } from './runner'
 import { configPageHtml } from './web-page'
 import { storage } from './storage'
@@ -193,9 +195,14 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
     }
   }
 
+  runNewlyEnabled(newlyEnabled)
+}
+
+/** 打开的任务立即跑一轮，避免等到下一次排期 */
+function runNewlyEnabled(entries: TaskEntry[]): void {
   const moduleStore = useModuleStore()
 
-  for (const entry of newlyEnabled) {
+  for (const entry of entries) {
     // 参数型开关只影响模块后续运行时的取值，不必顺带重跑一轮
     // （点赞改为手动运行后，打开开关只是放行手动入口）
     if (entry.param) {
@@ -210,6 +217,53 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
     logger.log(`【${entry.label}】已启用，立即触发一次`)
     void runModule(entry.moduleName, instance)
   }
+}
+
+/** 当前处于打开状态的开关 id，用于在整份配置被改写后找出新打开的任务 */
+function enabledTaskIds(): Set<string> {
+  const ids = new Set<string>()
+
+  for (const entry of TASK_ENTRIES) {
+    if (Boolean(taskTarget(entry)?.[entry.field ?? 'enabled'])) {
+      ids.add(entryId(entry))
+    }
+  }
+
+  return ids
+}
+
+function readModuleConfigJson(): string {
+  return JSON.stringify(useModuleStore().moduleConfig, null, 2)
+}
+
+/** 应用页面提交的配置 JSON，返回规范化后的文本供页面回显 */
+function applyModuleConfigJson(text: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`不是合法的 JSON：${(error as Error).message}`)
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error('顶层必须是一个对象')
+  }
+
+  // 缺了 DailyTasks 的文本几乎一定是误删，放进去等于清空全部任务配置
+  if (!isPlainObject(parsed.DailyTasks)) {
+    throw new Error('缺少 DailyTasks，保存会清空所有任务配置，已拒绝')
+  }
+
+  const before = enabledTaskIds()
+  overwriteConfig(useModuleStore().moduleConfig, parsed)
+
+  const newlyEnabled = TASK_ENTRIES.filter(
+    (entry) =>
+      !before.has(entryId(entry)) && Boolean(taskTarget(entry)?.[entry.field ?? 'enabled']),
+  )
+  runNewlyEnabled(newlyEnabled)
+
+  return readModuleConfigJson()
 }
 
 /** 点赞任务模块名 */
@@ -248,6 +302,48 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     response.end(configPageHtml)
     return
+  }
+
+  if (request.method === 'GET' && url.startsWith('/api/logs')) {
+    const after = Number(new URL(url, 'http://127.0.0.1').searchParams.get('after') ?? '0')
+    sendJson(response, 200, {
+      session: logSession,
+      records: getLogRecords(Number.isFinite(after) ? after : 0),
+    })
+    return
+  }
+
+  if (url === '/api/modules') {
+    if (request.method === 'GET') {
+      sendJson(response, 200, { json: readModuleConfigJson() })
+      return
+    }
+
+    if (request.method === 'POST') {
+      const body = await readBody(request)
+
+      let payload: { json?: unknown }
+      try {
+        payload = JSON.parse(body || '{}')
+      } catch {
+        sendJson(response, 400, { error: '请求体不是合法的 JSON' })
+        return
+      }
+
+      if (typeof payload.json !== 'string') {
+        sendJson(response, 400, { error: 'json 字段必须是字符串' })
+        return
+      }
+
+      try {
+        const json = applyModuleConfigJson(payload.json)
+        logger.log('配置 JSON 已更新')
+        sendJson(response, 200, { json })
+      } catch (error) {
+        sendJson(response, 400, { error: (error as Error).message })
+      }
+      return
+    }
   }
 
   if (url === '/api/tasks') {
@@ -351,7 +447,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 
   if (url === '/api/config') {
     if (request.method === 'GET') {
-      sendJson(response, 200, { logLevel: getLogLevel() })
+      sendJson(response, 200, { logLevel: getLogLevel(), logFile: logFilePath })
       return
     }
 

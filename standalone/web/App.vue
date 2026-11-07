@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElTable } from 'element-plus'
 import type {
   LikeCandidateSnapshot,
@@ -100,8 +100,11 @@ async function loadLogLevel(): Promise<void> {
     if (!response.ok) {
       return
     }
-    const data = (await response.json()) as { logLevel: string }
+    const data = (await response.json()) as { logLevel: string; logFile?: string }
     logLevel.value = data.logLevel
+    if (data.logFile) {
+      logFilePath.value = data.logFile
+    }
   } catch {
     // 忽略，使用默认值
   }
@@ -130,9 +133,224 @@ async function saveLogLevel(): Promise<void> {
   }
 }
 
+/* ---------------- 运行日志 ---------------- */
+
+const RECORD_LEVELS = ['debug', 'info', 'warn', 'error'] as const
+
+type RecordLevel = (typeof RECORD_LEVELS)[number]
+
+interface LogRecord {
+  seq: number
+  time: number
+  level: RecordLevel
+  title: string
+  text: string
+}
+
+/** 页面保留的记录上限，与服务端缓冲一致 */
+const MAX_LOG_RECORDS = 1000
+
+const logRecords = ref<LogRecord[]>([])
+const logSession = ref('')
+const logLevelFilter = ref<RecordLevel[]>([...RECORD_LEVELS])
+const logModule = ref<string>()
+const logKeyword = ref('')
+const logAutoScroll = ref(true)
+const logPaused = ref(false)
+const logFilePath = ref('data/blth.log')
+const logViewRef = ref<HTMLElement>()
+
+/** 已拉取到的最新序号；进程重启后由会话标识变化触发重取 */
+let logLastSeq = 0
+let logTimer: number | undefined
+
+const logModules = computed(() => {
+  const names = new Set<string>()
+
+  for (const record of logRecords.value) {
+    if (record.title) {
+      names.add(record.title)
+    }
+  }
+
+  return [...names].sort()
+})
+
+const filteredLogs = computed(() => {
+  const keyword = logKeyword.value.trim().toLowerCase()
+  const module = logModule.value
+
+  return logRecords.value.filter((record) => {
+    if (!logLevelFilter.value.includes(record.level)) {
+      return false
+    }
+    if (module && record.title !== module) {
+      return false
+    }
+    if (keyword && !`${record.title} ${record.text}`.toLowerCase().includes(keyword)) {
+      return false
+    }
+    return true
+  })
+})
+
+async function fetchLogs(after: number): Promise<void> {
+  const response = await fetch(`/api/logs?after=${after}`, { cache: 'no-store' })
+  if (!response.ok) {
+    return
+  }
+
+  const data = (await response.json()) as { session: string; records: LogRecord[] }
+
+  if (data.session !== logSession.value) {
+    // 重启后序号从头开始，不清空重取的话增量永远对不上
+    logSession.value = data.session
+    logRecords.value = []
+    logLastSeq = 0
+
+    if (after !== 0) {
+      await fetchLogs(0)
+      return
+    }
+  }
+
+  if (data.records.length === 0) {
+    return
+  }
+
+  logRecords.value.push(...data.records)
+  if (logRecords.value.length > MAX_LOG_RECORDS) {
+    logRecords.value.splice(0, logRecords.value.length - MAX_LOG_RECORDS)
+  }
+
+  logLastSeq = data.records[data.records.length - 1].seq
+  void scrollLogToBottom()
+}
+
+async function pollLogs(): Promise<void> {
+  try {
+    // 页面不可见时不拉取，切回来后一次性补齐
+    if (!logPaused.value && !document.hidden) {
+      await fetchLogs(logLastSeq)
+    }
+  } catch {
+    // 重启期间服务不可用，留着序号下一轮再试
+  } finally {
+    logTimer = window.setTimeout(pollLogs, 1000)
+  }
+}
+
+async function scrollLogToBottom(): Promise<void> {
+  if (!logAutoScroll.value) {
+    return
+  }
+
+  await nextTick()
+  const view = logViewRef.value
+  if (view) {
+    view.scrollTop = view.scrollHeight
+  }
+}
+
+function toggleLogPause(): void {
+  logPaused.value = !logPaused.value
+  if (!logPaused.value) {
+    void scrollLogToBottom()
+  }
+}
+
+function clearLogView(): void {
+  // 只清页面上的记录：序号要接着用，否则下一轮会把整个缓冲重新拉回来
+  logRecords.value = []
+}
+
+function formatClock(time: number): string {
+  const date = new Date(time)
+  const pad = (value: number) => String(value).padStart(2, '0')
+
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+watch(logAutoScroll, (enabled) => {
+  if (enabled) {
+    void scrollLogToBottom()
+  }
+})
+
+/* ---------------- 配置 JSON ---------------- */
+
+const configJson = ref('')
+const configJsonLoading = ref(false)
+const configJsonSaving = ref(false)
+const configJsonError = ref('')
+
+async function loadConfigJson(): Promise<void> {
+  configJsonLoading.value = true
+
+  try {
+    const response = await fetch('/api/modules', { cache: 'no-store' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const data = (await response.json()) as { json: string }
+    configJson.value = data.json
+    configJsonError.value = ''
+  } catch (err) {
+    ElMessage.error(`读取配置失败：${(err as Error).message}`)
+  } finally {
+    configJsonLoading.value = false
+  }
+}
+
+/** 只在本地校验并重排文本，不提交 */
+function formatConfigJson(): void {
+  try {
+    configJson.value = JSON.stringify(JSON.parse(configJson.value), null, 2)
+    configJsonError.value = ''
+  } catch (err) {
+    configJsonError.value = `不是合法的 JSON：${(err as Error).message}`
+  }
+}
+
+async function saveConfigJson(): Promise<void> {
+  configJsonSaving.value = true
+
+  try {
+    const response = await fetch('/api/modules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ json: configJson.value }),
+    })
+    const data = (await response.json()) as { json?: string; error?: string }
+
+    if (!response.ok) {
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+
+    configJson.value = data.json ?? configJson.value
+    configJsonError.value = ''
+    ElMessage.success('已保存，配置立即生效')
+
+    // 开关也可能一起被改写，同步刷新上方的任务卡片
+    await load()
+  } catch (err) {
+    configJsonError.value = (err as Error).message
+    ElMessage.error(`保存失败：${(err as Error).message}`)
+  } finally {
+    configJsonSaving.value = false
+  }
+}
+
 onMounted(() => {
   load()
   loadLogLevel()
+  loadConfigJson()
+  void pollLogs()
+})
+
+onUnmounted(() => {
+  window.clearTimeout(logTimer)
 })
 
 /* ---------------- 手动点赞 ---------------- */
@@ -239,15 +457,20 @@ async function runLike(): Promise<void> {
 <template>
   <div class="page">
     <header class="header">
-      <h1>BLTH 配置</h1>
-      <p class="hint">此处可调整任务开关与少量开关型参数；其它任务参数（投币数量、观看时长、弹幕列表、房间名单）请编辑 data/storage.json</p>
+      <div class="header-text">
+        <h1>BLTH 配置</h1>
+        <p class="hint">此处可调整任务开关与少量开关型参数；其余任务参数（投币数量、观看时长、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改</p>
+      </div>
     </header>
 
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
 
     <el-card shadow="never" class="card">
       <template #header>
-        <span class="group-name">日志</span>
+        <div class="card-header">
+          <span class="group-name">日志</span>
+          <span class="hint">等级同时决定终端输出与 {{ logFilePath }} 的写入</span>
+        </div>
       </template>
 
       <div class="row">
@@ -256,6 +479,53 @@ async function runLike(): Promise<void> {
           <el-option v-for="lv in logLevels" :key="lv.value" :label="lv.label" :value="lv.value" />
         </el-select>
       </div>
+
+      <div class="row log-toolbar">
+        <el-select
+          v-model="logLevelFilter"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          size="small"
+          placeholder="日志等级"
+          style="width: 200px"
+        >
+          <el-option v-for="level in RECORD_LEVELS" :key="level" :label="level" :value="level" />
+        </el-select>
+        <el-select
+          v-model="logModule"
+          clearable
+          size="small"
+          placeholder="全部模块"
+          style="width: 220px"
+        >
+          <el-option v-for="name in logModules" :key="name" :label="name" :value="name" />
+        </el-select>
+        <el-input
+          v-model="logKeyword"
+          size="small"
+          clearable
+          placeholder="关键词"
+          class="log-keyword"
+        />
+        <el-switch v-model="logAutoScroll" size="small" active-text="自动滚动" />
+        <el-button size="small" @click="toggleLogPause">{{ logPaused ? '继续' : '暂停' }}</el-button>
+        <el-button size="small" @click="clearLogView">清空显示</el-button>
+      </div>
+
+      <div ref="logViewRef" class="log-view">
+        <p v-if="filteredLogs.length === 0" class="log-empty">没有匹配的日志</p>
+        <div v-for="record in filteredLogs" :key="record.seq" class="log-line">
+          <span class="log-time">{{ formatClock(record.time) }}</span>
+          <span class="log-level" :class="`lv-${record.level}`">{{ record.level }}</span>
+          <span v-if="record.title" class="log-title">{{ record.title }}</span>
+          <span class="log-text">{{ record.text }}</span>
+        </div>
+      </div>
+
+      <p class="hint log-footer">
+        内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条
+      </p>
     </el-card>
 
     <el-card shadow="never" class="card">
@@ -355,6 +625,37 @@ async function runLike(): Promise<void> {
       </div>
     </el-card>
 
+    <el-card shadow="never" class="card">
+      <template #header>
+        <div class="card-header">
+          <span class="group-name">配置 JSON</span>
+          <el-button size="small" :loading="configJsonLoading" @click="loadConfigJson">
+            重新读取
+          </el-button>
+        </div>
+      </template>
+
+      <p class="hint">
+        对应 data/storage.json 中的 modules，保存后立即生效并落盘。下划线开头的是运行状态（完成时间、点赞计数等），一般不用改。
+      </p>
+
+      <el-input
+        v-model="configJson"
+        type="textarea"
+        :rows="18"
+        spellcheck="false"
+        class="config-json"
+        @input="configJsonError = ''"
+      />
+
+      <p v-if="configJsonError" class="json-error">{{ configJsonError }}</p>
+
+      <div class="row">
+        <el-button type="primary" :loading="configJsonSaving" @click="saveConfigJson">保存</el-button>
+        <el-button @click="formatConfigJson">格式化</el-button>
+      </div>
+    </el-card>
+
     <p class="footer">开关变更会立即写入配置；新启用的任务若今天尚未完成，会马上运行一次。</p>
   </div>
 </template>
@@ -366,10 +667,24 @@ async function runLike(): Promise<void> {
   padding: 28px 16px 48px;
 }
 
+.header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
 .header h1 {
   margin: 0 0 6px;
   font-size: 20px;
   font-weight: 500;
+}
+
+.card-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .hint {
@@ -411,6 +726,101 @@ async function runLike(): Promise<void> {
 .progress-text {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.log-toolbar {
+  margin-top: 8px;
+}
+
+.log-keyword {
+  flex: 1;
+  min-width: 160px;
+}
+
+.log-view {
+  height: 320px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  font-family: ui-monospace, sfmono-regular, menlo, consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+}
+
+.log-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.log-time {
+  flex: none;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-level {
+  flex: none;
+  width: 44px;
+  text-transform: uppercase;
+}
+
+.log-title {
+  flex: none;
+  color: var(--el-text-color-secondary);
+}
+
+.log-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-empty {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+}
+
+.log-footer {
+  margin-top: 8px;
+}
+
+.lv-debug {
+  color: var(--el-text-color-placeholder);
+}
+
+.lv-info {
+  color: var(--el-color-primary);
+}
+
+.lv-warn {
+  color: var(--el-color-warning);
+}
+
+.lv-error {
+  color: var(--el-color-danger);
+}
+
+.config-json {
+  margin-top: 8px;
+}
+
+.config-json :deep(.el-textarea__inner) {
+  font-family: ui-monospace, sfmono-regular, menlo, consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.json-error {
+  margin: 8px 0 0;
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .label {
