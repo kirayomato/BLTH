@@ -96,6 +96,8 @@ export const useModuleStore = defineStore('module', () => {
             moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._lastCompleteTime = 0
             moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._todayLightLikes = 0
             moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light._lastLikeTime = 0
+            // _likeStopped 不在这里清除：点赞整体停止后需要等跨天自动恢复，
+            // 点【再次运行任务】不会重新开启点赞
 
             rerunModule('Default_FansMedals', true)
             rerunModule('DailyTask_LiveTask_LightTask')
@@ -285,6 +287,8 @@ export const useModuleStore = defineStore('module', () => {
       const lightConfig = moduleConfig.value.DailyTasks.LiveTasks.medalTasks.light
       lightConfig._todayLightLikes = 0
       lightConfig._lastLikeTime = 0
+      // 跨天清除「点赞已整体停止」标记
+      lightConfig._likeStopped = false
       clearStatus()
     }, delayToNextMoment(0, 0).ms)
   })()

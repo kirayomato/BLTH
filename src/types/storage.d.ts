@@ -40,6 +40,8 @@ interface ModuleConfig {
           _todayLightLikes: number
           /** 今日点赞计数所属的时间戳，用于跨天重置；与 _lastCompleteTime（模块每轮运行都会更新）分开 */
           _lastLikeTime: number
+          /** 点赞是否已因进度持续未增长而整体停止；只在跨天时重置，再次运行任务不会清除 */
+          _likeStopped: boolean
         }
         watch: {
           enabled: boolean

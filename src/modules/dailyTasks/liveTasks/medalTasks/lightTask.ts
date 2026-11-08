@@ -23,6 +23,13 @@ class LightTask extends MedalModule {
   private static readonly LIKE_BATCH_SIZE = 10
   /** 每个直播间每次点赞的轮数 */
   private static readonly LIKE_ROUNDS = 12
+  /**
+   * 单次运行中「点赞进度没跟着涨」累计达到该次数后，停止整个点赞任务
+   *
+   * 单次命中只跳过该房间（与原有逻辑一致）；累计到该次数说明点赞整体不生效，
+   * 继续跑下去没有意义。
+   */
+  private static readonly LIKE_STALL_LIMIT = 5
   /** 点赞任务标题 */
   private static readonly LIKE_MISSION_TITLE = '点赞'
 
@@ -176,6 +183,8 @@ class LightTask extends MedalModule {
     if (!isTimestampToday(this.config._lastLikeTime ?? 0)) {
       this.config._todayLightLikes = 0
       this.config._lastLikeTime = tsm()
+      // 跨天后停止标记一并清除，新的一天重新允许点赞
+      this.config._likeStopped = false
       // 跨天后任务进度重置，之前检查出的房间列表已经过期
       this.checkedRooms = []
     }
@@ -360,6 +369,14 @@ class LightTask extends MedalModule {
     }
 
     const totalLikes = this.syncDailyLikeState()
+
+    // 停止标记是持久化的：一旦本次运行因进度持续未增长而停止，之后再次收集也要拦下，
+    // 直到跨天自动恢复（点【再次运行任务】不会清除该标记）
+    if (this.config._likeStopped) {
+      this.logger.warn('今日点赞任务已停止（点赞进度多次没有增长），明天会自动恢复')
+      return null
+    }
+
     this.logger.log(
       `今日已点亮勋章点赞 ${totalLikes} 次（提示阈值 ${LightTask.DAILY_LIKE_LIMIT}，未点亮勋章的点赞不计数）`,
     )
@@ -413,12 +430,20 @@ class LightTask extends MedalModule {
    * 收集列表时的检查结果只用于初筛；真正点赞时每轮都会重新确认直播状态与
    * 「点赞30次」进度，已经下播或任务完成的房间会被移出本批。
    *
-   * 今日点赞达到提示阈值后仅提示，不再跳过任何勋章。
+   * 今日点赞达到提示阈值后仅提示，不再跳过任何勋章；
+   * 「点赞进度没有增长」单次命中照旧跳过该房间，
+   * 单次运行中累计达到阈值后停止整个点赞任务。
    *
    * @param roomids 要执行点赞的直播间号
    */
   private async executeLike(roomids: number[]): Promise<void> {
     let totalLikes = this.syncDailyLikeState()
+
+    // 停止标记是持久化的：只有跨天才会自动清除
+    if (this.config._likeStopped) {
+      this.logger.warn('今日点赞任务已停止（点赞进度多次没有增长），明天会自动恢复')
+      return
+    }
 
     this.logger.log(
       `今日已点亮勋章点赞 ${totalLikes} 次（提示阈值 ${LightTask.DAILY_LIKE_LIMIT}，未点亮勋章的点赞不计数）`,
@@ -432,6 +457,15 @@ class LightTask extends MedalModule {
         `今日点赞已达到提示阈值 ${LightTask.DAILY_LIKE_LIMIT} 次，继续点赞可能不再产生收益`,
       )
     }
+
+    /**
+     * 本次运行中「点赞进度没有增长」的累计次数
+     *
+     * 单次命中只跳过该房间（与原有逻辑一致）；累计达到阈值说明点赞整体不生效，
+     * 此时停止整个点赞任务（写回配置，跨天或再次运行任务时清除）。
+     */
+    let stallCount = 0
+
     if (roomids.length === 0) {
       this.logger.log('没有选择任何直播间，跳过点赞任务')
       return
@@ -469,7 +503,7 @@ class LightTask extends MedalModule {
 
     // 2. 按批次执行：每批都跑满 12 轮，每轮跑之前重新确认房间状态与任务进度
     for (const batch of batchList) {
-      if (!this.config.likeEnabled) break
+      if (!this.config.likeEnabled || this.config._likeStopped) break
       let n = batch.length
       this.logger.log(
         `点赞列表(${batch.length}): ${batch.map((medal) => medal.anchor_info.nick_name)}`,
@@ -478,12 +512,13 @@ class LightTask extends MedalModule {
 
       for (let j = 0; j < LightTask.LIKE_ROUNDS; j++) {
         if (n === 0) break
-        if (!this.config.likeEnabled) break
+        if (!this.config.likeEnabled || this.config._likeStopped) break
         for (let i = n - 1; i >= 0; i--) {
           if (!this.config.likeEnabled) {
             this.logger.log('点赞开关已关闭，停止点赞任务')
             break
           }
+          if (this.config._likeStopped) break
 
           const medal = batch[i]
           let skip = false
@@ -515,12 +550,23 @@ class LightTask extends MedalModule {
                 this.logger.log(
                   `${medal.anchor_info.nick_name} 点赞进度: ${state.prog} / ${state.total}`,
                 )
-                // 已跑满，或连续多轮进度没跟着涨（点赞不生效）就放弃该房间
-                if (state.prog >= state.total || j - state.prog > 2) {
-                  if (j - state.prog > 2) {
-                    this.logger.warn(`${medal.anchor_info.nick_name} 点赞任务进度达到上限`)
-                  }
+                // 已跑满：任务完成，不再点赞
+                if (state.prog >= state.total) {
                   skip = true
+                } else if (j - state.prog > 2) {
+                  // 进度没跟着涨（点赞暂时没生效）：跳过该房间（与原有逻辑一致）；
+                  // 单次运行中累计达到阈值说明点赞整体不生效，停止整个点赞任务
+                  stallCount++
+                  this.logger.warn(
+                    `${medal.anchor_info.nick_name} 点赞任务进度没有增长（本次运行累计 ${stallCount}/${LightTask.LIKE_STALL_LIMIT} 次），跳过点赞任务`,
+                  )
+                  skip = true
+                  if (stallCount >= LightTask.LIKE_STALL_LIMIT) {
+                    this.config._likeStopped = true
+                    this.logger.warn(
+                      `本次运行点赞进度已累计 ${stallCount} 次没有增长，点赞整体不生效，停止整个点赞任务`,
+                    )
+                  }
                 }
               }
             }
@@ -561,7 +607,13 @@ class LightTask extends MedalModule {
     // 这一轮点赞改变了任务进度，下次收集需要重新检查
     this.checkedRooms = []
 
-    this.logger.log(`点赞任务已完成，今日已点亮勋章点赞 ${totalLikes} 次`)
+    if (this.config._likeStopped) {
+      this.logger.warn(
+        `点赞任务已停止（进度累计 ${stallCount} 次没有增长），今日已点亮勋章点赞 ${totalLikes} 次`,
+      )
+    } else {
+      this.logger.log(`点赞任务已完成，今日已点亮勋章点赞 ${totalLikes} 次`)
+    }
   }
 
   /**
@@ -675,8 +727,12 @@ class LightTask extends MedalModule {
       // 点赞改为手动运行，但候选直播间在这里（初始化时）就查好：
       // 面板点【选择直播间点赞】直接展示结果，不用现查一遍
       this.syncDailyLikeState()
-      tasks.push(this.checkLikeRooms().then(() => undefined))
-
+      if (this.config._likeStopped) {
+        // 今日点赞已整体停止：不再探测候选，等跨天自动恢复
+        this.logger.log('今日点赞任务已停止，跳过点赞列表检查')
+      } else {
+        tasks.push(this.checkLikeRooms().then(() => undefined))
+      }
     } else {
       this.logger.log('点赞功能已关闭，跳过点赞任务')
     }

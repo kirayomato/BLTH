@@ -102,6 +102,8 @@ const defaultValues: DefaultValues = {
             _todayLightLikes: 0,
             // 取当前时间而不是 0：老配置补上该字段时不会被视为跨天，避免把当天已点赞次数清零后重复点赞
             _lastLikeTime: Date.now(),
+            // 老配置没有该字段时视为未停止
+            _likeStopped: false,
           },
           watch: {
             enabled: false,
