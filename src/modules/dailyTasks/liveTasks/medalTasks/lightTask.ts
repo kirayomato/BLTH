@@ -439,13 +439,31 @@ class LightTask extends MedalModule {
   }
 
   /**
+   * 重新获取粉丝勋章
+   *
+   * 粉丝勋章是启动时的快照，到自动点赞触发时可能已经过去十几个小时：
+   * 新关注的主播不会出现在快照里，熄灭的勋章、改过的昵称也不会同步过来，
+   * 因此执行前强制刷新一次。沿用 rerunModule 而不是直接调 run，
+   * 是为了顺带清掉该模块原有的下次运行定时器，避免重复排期。
+   */
+  private async reloadFansMedals(): Promise<void> {
+    this.logger.log('每日自动点赞：重新获取粉丝勋章')
+    try {
+      await useModuleStore().rerunModule('Default_FansMedals', true)
+    } catch (error) {
+      // 失败时保留原快照，后续 waitForFansMedals 会按实际状态决定能否继续
+      this.logger.error('每日自动点赞：重新获取粉丝勋章失败，沿用当前快照', error)
+    }
+  }
+
+  /**
    * 按默认勾选规则自动执行一次点赞
    *
    * 默认勾选规则与手动点赞窗口保持一致：亲密度储蓄已满的勋章不勾选
    * （点赞不再涨亲密度），其余候选全部勾选。
    *
-   * 候选列表在模块初始化时查过一次，可能与触发时间隔了十几个小时，
-   * 因此这里先清空重新探测，避免用已经下播或任务已完成的旧结果。
+   * 执行前会重新获取粉丝勋章并重新探测候选：快照与候选都是模块初始化时查的，
+   * 可能与触发时间隔了十几个小时。
    */
   private async autoLikeWithDefaults(): Promise<void> {
     if (this.autoLikeRunning) {
@@ -459,6 +477,9 @@ class LightTask extends MedalModule {
 
     this.autoLikeRunning = true
     try {
+      // 先刷新粉丝勋章，后面探测候选、执行点赞用的都是最新数据
+      await this.reloadFansMedals()
+
       this.checkedRooms = []
 
       const snapshot = await this.collectLikeCandidates()
