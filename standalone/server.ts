@@ -320,9 +320,9 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 
       const roomids = Array.isArray(payload.roomids)
         ? payload.roomids.filter(
-            (roomid): roomid is number =>
-              typeof roomid === 'number' && Number.isInteger(roomid) && roomid > 0,
-          )
+          (roomid): roomid is number =>
+            typeof roomid === 'number' && Number.isInteger(roomid) && roomid > 0,
+        )
         : []
 
       if (roomids.length === 0) {
@@ -416,7 +416,7 @@ export function startConfigServer(): void {
     logger.error(`配置页面启动失败：${error.message}`)
   })
 
-  server.listen(options.configPort, '127.0.0.1', () => {
-    logger.log(`配置页面：http://127.0.0.1:${options.configPort}`)
+  server.listen(options.configPort, '0.0.0.0', () => {
+    logger.log(`配置页面：http://0.0.0.0:${options.configPort}`)
   })
 }
