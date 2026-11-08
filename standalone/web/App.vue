@@ -141,7 +141,7 @@ const likeTableRef = ref<InstanceType<typeof ElTable>>()
 const likeCandidates = ref<LikeRoomCandidate[]>([])
 const likeSelection = ref<LikeRoomCandidate[]>([])
 const likeLoading = ref(false)
-/** 今日已点赞次数与每日上限 */
+/** 今日已点赞次数与提示阈值 */
 const todayLikes = ref(0)
 const dailyLimit = ref(0)
 
@@ -270,7 +270,7 @@ async function runLike(): Promise<void> {
       <div class="row">
         <el-button :loading="likeLoading" @click="loadLikeCandidates">获取可点赞直播间</el-button>
         <span v-if="dailyLimit > 0" class="label">
-          今日已点亮勋章点赞 {{ todayLikes }} 次（上限 {{ dailyLimit }}，未点亮勋章的点赞不计数）
+          今日已点亮勋章点赞 {{ todayLikes }} 次（提示阈值 {{ dailyLimit }}，未点亮勋章的点赞不计数）
         </span>
       </div>
 

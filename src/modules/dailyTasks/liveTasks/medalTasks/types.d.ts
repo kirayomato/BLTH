@@ -43,13 +43,13 @@ interface LikeRoomCandidate {
   likeProgressTotal: number | null
 }
 
-/** 手动点赞的候选快照：候选列表 + 今日点赞额度信息 */
+/** 手动点赞的候选快照：候选列表 + 今日点赞计数信息 */
 interface LikeCandidateSnapshot {
   /** 可点赞的直播间列表 */
   candidates: LikeRoomCandidate[]
   /** 今日已点赞总次数 */
   todayLikes: number
-  /** 每日点赞上限 */
+  /** 每日点赞提示阈值（仅提示，不限制点赞） */
   dailyLimit: number
 }
 
@@ -57,7 +57,7 @@ interface LikeCandidateSnapshot {
  * `GetActivatedMedalInfo` 的摘要信息
  *
  * 粉丝勋章面板（fansMedals）是启动时的快照，点亮状态会随实时交互变化：
- * 未点亮 → 已点亮后开始受每日上限约束，已点亮 → 熄灭后需要重新点亮。
+ * 未点亮 → 已点亮后点赞开始计入今日计数，已点亮 → 熄灭后需要重新点亮。
  * 该接口一次请求同时给出点亮状态与任务列表，用于刷新快照并按最新状态分支。
  */
 interface ActivatedMedalSummary {

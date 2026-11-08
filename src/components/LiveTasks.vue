@@ -476,7 +476,7 @@ function handleRowClick(row: MedalRow) {
 const manualLikeLoading = ref<boolean>(false)
 /** 可点赞的直播间候选（点赞模式下表格的数据源） */
 const likeCandidates = ref<MedalRow[]>([])
-/** 今日已点赞次数与每日上限，随候选快照一起展示 */
+/** 今日已点赞次数与提示阈值，随候选快照一起展示 */
 const likeTodayLikes = ref(0)
 const likeDailyLimit = ref(0)
 const likeSelection = ref<MedalRow[]>([])
@@ -750,9 +750,13 @@ watch(
     >
       <!-- 右缘拖拽条：按住左右拖动调整窗口宽度（拖拽入口在 document 捕获阶段统一监听） -->
       <div class="panel-resize-handle" title="拖拽调整窗口宽度"></div>
-      <el-text v-if="isLikeMode" type="info" class="panel-summary">
-        共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（上限
-        {{ likeDailyLimit }}，未点亮勋章的点赞不计数、不受限）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。
+      <el-text
+        v-if="isLikeMode"
+        :type="likeTodayLikes >= likeDailyLimit && likeDailyLimit > 0 ? 'warning' : 'info'"
+        class="panel-summary"
+      >
+        共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（提示阈值
+        {{ likeDailyLimit }}，未点亮勋章的点赞不计数）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。
       </el-text>
       <el-text v-if="isPriorityMode" type="info" class="panel-summary">
         roomidList2
