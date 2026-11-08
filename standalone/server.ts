@@ -286,6 +286,11 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         sendJson(response, 409, { error: '正在收集点赞列表，请稍后' })
         return
       }
+      // 每日自动点赞执行期间也会收集候选，避免两边互相覆盖候选列表
+      if (instance.isManualLikeRunning) {
+        sendJson(response, 409, { error: '点赞任务正在运行中' })
+        return
+      }
 
       likeCollecting = true
       try {

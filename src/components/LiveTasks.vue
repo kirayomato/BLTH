@@ -756,7 +756,8 @@ watch(
         class="panel-summary"
       >
         共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（提示阈值
-        {{ likeDailyLimit }}，未点亮勋章的点赞不计数）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。
+        {{ likeDailyLimit }}，未点亮勋章的点赞不计数）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。每天 23:30
+        会自动按此默认勾选规则执行一次点赞。
       </el-text>
       <el-text v-if="isPriorityMode" type="info" class="panel-summary">
         roomidList2

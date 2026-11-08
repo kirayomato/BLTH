@@ -32,9 +32,17 @@ class LightTask extends MedalModule {
   private static readonly LIKE_STALL_LIMIT = 5
   /** 点赞任务标题 */
   private static readonly LIKE_MISSION_TITLE = '点赞'
+  /** 每日自动点赞的小时（24 小时制） */
+  private static readonly AUTO_LIKE_HOUR = 23
+  /** 每日自动点赞的分钟 */
+  private static readonly AUTO_LIKE_MINUTE = 30
 
   /** 手动点赞是否正在执行，避免重复触发 */
   private manualLikeRunning = false
+  /** 每日自动点赞是否正在执行，避免与手动点赞互相干扰 */
+  private autoLikeRunning = false
+  /** 每日自动点赞的定时器；模块重新运行时重建，关闭点赞开关时清除 */
+  private autoLikeTimer?: number
   /**
    * 上一次检查得到的可点赞直播间
    *
@@ -47,9 +55,15 @@ class LightTask extends MedalModule {
     useModuleStore().moduleStatus.DailyTasks.LiveTasks.medalTasks.light = s
   }
 
-  /** 手动点赞是否正在执行 */
+  /**
+   * 点赞是否正在执行（手动或每日自动）
+   *
+   * 控制面板据此禁用点赞按钮：自动点赞期间手动打开选择窗口会与它争抢候选列表。
+   *
+   * @returns 任意一种点赞流程正在执行时返回 true
+   */
   public get isManualLikeRunning(): boolean {
-    return this.manualLikeRunning
+    return this.manualLikeRunning || this.autoLikeRunning
   }
 
   private MEDAL_FILTERS: LightTaskMedalFilters = {
@@ -425,6 +439,84 @@ class LightTask extends MedalModule {
   }
 
   /**
+   * 按默认勾选规则自动执行一次点赞
+   *
+   * 默认勾选规则与手动点赞窗口保持一致：亲密度储蓄已满的勋章不勾选
+   * （点赞不再涨亲密度），其余候选全部勾选。
+   *
+   * 候选列表在模块初始化时查过一次，可能与触发时间隔了十几个小时，
+   * 因此这里先清空重新探测，避免用已经下播或任务已完成的旧结果。
+   */
+  private async autoLikeWithDefaults(): Promise<void> {
+    if (this.autoLikeRunning) {
+      this.logger.warn('每日自动点赞正在运行中，忽略本次触发')
+      return
+    }
+    if (this.manualLikeRunning) {
+      this.logger.warn('手动点赞正在运行中，跳过本次每日自动点赞')
+      return
+    }
+
+    this.autoLikeRunning = true
+    try {
+      this.checkedRooms = []
+
+      const snapshot = await this.collectLikeCandidates()
+      if (!snapshot) {
+        // 前置条件不满足（开关关闭 / 今日已停止等），collectLikeCandidates 已记录原因
+        return
+      }
+      if (snapshot.candidates.length === 0) {
+        this.logger.log('每日自动点赞：没有可以点赞的直播间')
+        return
+      }
+
+      // 默认勾选规则：亲密度储蓄已满的勋章不勾选
+      const roomids = snapshot.candidates
+        .filter((room) => !room.reachFreeIntimacyLimit)
+        .map((room) => room.roomid)
+      if (roomids.length === 0) {
+        this.logger.log('每日自动点赞：按默认勾选规则没有需要点赞的直播间')
+        return
+      }
+
+      this.logger.log(
+        `每日自动点赞：候选 ${snapshot.candidates.length} 个直播间，按默认勾选规则选中 ${roomids.length} 个`,
+      )
+      await this.likeRooms(roomids)
+    } catch (error) {
+      this.logger.error('每日自动点赞执行出错', error)
+    } finally {
+      this.autoLikeRunning = false
+    }
+  }
+
+  /**
+   * 安排下一次每日自动点赞
+   *
+   * 每次 run() 都会重新安排，页面刷新或模块被重跑时旧定时器先被清除；
+   * 点赞开关关闭时不安排，避免按钮关掉后仍然自动点赞。
+   */
+  private scheduleAutoLike(): void {
+    if (this.autoLikeTimer) {
+      clearTimeout(this.autoLikeTimer)
+      this.autoLikeTimer = undefined
+    }
+    if (!this.config.likeEnabled) return
+
+    const diff = delayToNextMoment(LightTask.AUTO_LIKE_HOUR, LightTask.AUTO_LIKE_MINUTE)
+    this.autoLikeTimer = setTimeout(() => {
+      // 定时器已触发，先清空再进入下一轮
+      this.autoLikeTimer = undefined
+      void this.autoLikeWithDefaults()
+    }, diff.ms)
+
+    this.logger.log(
+      `每日自动点赞已安排（${LightTask.AUTO_LIKE_HOUR}:${String(LightTask.AUTO_LIKE_MINUTE).padStart(2, '0')}），距下次还有 ${diff.str}`,
+    )
+  }
+
+  /**
    * 为指定直播间执行点赞
    *
    * 收集列表时的检查结果只用于初筛；真正点赞时每轮都会重新确认直播状态与
@@ -722,9 +814,12 @@ class LightTask extends MedalModule {
     this.status = 'running'
     const fansMedals = this.getMedals()
 
+    // 登记每日自动点赞：即使点赞开关关闭也要先清掉旧定时器，避免关掉后仍自动点赞
+    this.scheduleAutoLike()
+
     const tasks: Promise<void>[] = []
     if (this.config.likeEnabled) {
-      // 点赞改为手动运行，但候选直播间在这里（初始化时）就查好：
+      // 点赞默认手动运行，但候选直播间在这里（初始化时）就查好：
       // 面板点【选择直播间点赞】直接展示结果，不用现查一遍
       this.syncDailyLikeState()
       if (this.config._likeStopped) {

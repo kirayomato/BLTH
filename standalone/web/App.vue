@@ -260,11 +260,12 @@ async function runLike(): Promise<void> {
 
     <el-card shadow="never" class="card">
       <template #header>
-        <span class="group-name">点赞（手动）</span>
+        <span class="group-name">点赞（手动 / 每日自动）</span>
       </template>
 
       <p class="hint">
-        点赞任务不再自动运行：先获取可点赞的直播间，勾选后开始点赞，执行进度见运行日志。
+        先获取可点赞的直播间，勾选后开始点赞，执行进度见运行日志。此外每天 23:30
+        会自动按默认勾选规则执行一次点赞（亲密度储蓄已满的勋章不勾选）。
       </p>
 
       <div class="row">
