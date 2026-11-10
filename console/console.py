@@ -8,6 +8,8 @@
 配置与点赞请求经由 stdin/stdout 上的单行 JSON 控制通道转发给任务进程；控制台自己不写
 ``storage.json``，文件的唯一写入方始终是任务进程，因此不存在两边并发覆盖。
 
+任务进程的日志汇进内存缓冲供页面增量拉取，同时原样打印到控制台终端，便于脱离浏览器观察。
+
 只依赖标准库，入口为 ``python console/console.py``。
 """
 
@@ -141,6 +143,36 @@ def fetch_avatar(url: str) -> tuple[bytes, str]:
     return data, content_type
 
 
+# 终端输出锁：stdout/stderr 两个读取线程与请求线程都会打印，整行加锁避免交错
+PRINT_LOCK = threading.Lock()
+
+
+def print_line(level: str, title: str, text: str) -> None:
+    """把一行日志同时送到控制台终端。
+
+    终端只是观察窗口：编码表达不了的字符（emoji、生僻字）按替换输出，整行不能丢；
+    stdout 被关闭或指向不可写的管道时直接放弃，不能让打印失败打断读取线程、
+    连带丢掉后续日志。等级只在非 info 时标注，日常日志保持原样。
+    """
+    stream = sys.stdout
+    if stream is None:
+        return
+
+    body = f"{title} {text}".strip() if title else text
+    line = body if level == "info" else f"[{level.upper()}] {body}"
+
+    with PRINT_LOCK:
+        try:
+            try:
+                stream.write(line + "\n")
+            except UnicodeEncodeError:
+                codec = getattr(stream, "encoding", None) or "utf-8"
+                stream.write(line.encode(codec, "replace").decode(codec, "replace") + "\n")
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+
+
 class LogBuffer:
     """控制台进程内的日志环形缓冲。
 
@@ -169,6 +201,8 @@ class LogBuffer:
                 "text": text,
             })
             self.next_seq += 1
+
+        print_line(level, title, text)
 
     def since(self, after: int) -> dict:
         with self.lock:

@@ -30,3 +30,4 @@ tmp
 .eslintcache
 /.mimocode
 /.workbuddy
+*.pyc
