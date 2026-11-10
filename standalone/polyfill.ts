@@ -1,4 +1,4 @@
-import { options, getLogLevel } from './config'
+import { options } from './config'
 import { loadCookies } from './cookie'
 
 /**
@@ -109,26 +109,27 @@ function installCookieStore(): void {
 }
 
 /**
+ * 日志等级标记，必须与 console/console.py 的 LEVEL_MARK 保持一致。
+ *
+ * 用 ASCII 记录分隔符包裹，终端里不占可见宽度；控制台解析后从正文中剥掉。
+ */
+const LOG_LEVEL_MARK = '\x1eBLTHLVL:'
+const LOG_LEVEL_END = '\x1e'
+
+/**
  * Node 的 console 不支持 %c，共享代码的日志前缀会把整段样式声明原样打出来，这里过滤掉。
  *
- * 同时按等级屏蔽输出：等级决定终端留下什么，控制台进程捕获到的就是这份输出。
+ * 不按等级屏蔽：全部级别的输出都保留，等级只用于页面上的显示筛选。为了让筛选准确，
+ * 每行前面带一个记录分隔符包裹的等级标记，控制台读取后据此归档并从正文里剥掉。
  */
 function installConsoleFilter(): void {
-  // 等级数值越小越详细；none 为最高，会屏蔽一切输出
-  const levelRank: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3, none: 4 }
-  const methodRank: Record<string, number> = { debug: 0, log: 1, warn: 2, error: 3 }
+  const methodLevel = { log: 'info', debug: 'debug', warn: 'warn', error: 'error' } as const
 
   for (const method of ['log', 'debug', 'warn', 'error'] as const) {
     const original = console[method].bind(console)
 
     console[method] = (...args: unknown[]) => {
-      // 低于当前等级的日志不记录也不输出，实现日志等级开关
-      const threshold = levelRank[getLogLevel()] ?? 1
-      if (methodRank[method] < threshold) {
-        return
-      }
-
-      original(...formatConsoleArgs(args))
+      original(`${LOG_LEVEL_MARK}${methodLevel[method]}${LOG_LEVEL_END}`, ...formatConsoleArgs(args))
     }
   }
 }

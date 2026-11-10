@@ -20,16 +20,6 @@ const tasks = ref<TaskView[]>([])
 const saving = ref(false)
 const error = ref('')
 
-const logLevels = [
-  { value: 'debug', label: 'Debug（最详细）' },
-  { value: 'info', label: 'Info（默认）' },
-  { value: 'warn', label: 'Warn（仅警告与错误）' },
-  { value: 'error', label: 'Error（仅错误）' },
-  { value: 'none', label: '关闭（不输出）' },
-]
-const logLevel = ref('info')
-const logSaving = ref(false)
-
 const groups = computed(() => {
   const result: { name: string; tasks: TaskView[] }[] = []
 
@@ -94,42 +84,6 @@ async function save(): Promise<void> {
   }
 }
 
-async function loadLogLevel(): Promise<void> {
-  try {
-    const response = await fetch('/api/config')
-    if (!response.ok) {
-      return
-    }
-    const data = (await response.json()) as { logLevel: string }
-    logLevel.value = data.logLevel
-  } catch {
-    // 忽略，使用默认值
-  }
-}
-
-async function saveLogLevel(): Promise<void> {
-  logSaving.value = true
-
-  try {
-    const response = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ logLevel: logLevel.value }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    ElMessage.success('日志等级已更新')
-  } catch (err) {
-    ElMessage.error(`保存失败：${(err as Error).message}`)
-    await loadLogLevel()
-  } finally {
-    logSaving.value = false
-  }
-}
-
 /* ---------------- 运行日志 ---------------- */
 
 const RECORD_LEVELS = ['debug', 'info', 'warn', 'error'] as const
@@ -149,7 +103,8 @@ const MAX_LOG_RECORDS = 1000
 
 const logRecords = ref<LogRecord[]>([])
 const logSession = ref('')
-const logLevelFilter = ref<RecordLevel[]>([...RECORD_LEVELS])
+/** 默认隐藏 debug：全部等级都会记录，页面上先只看要点 */
+const logLevelFilter = ref<RecordLevel[]>(['info', 'warn', 'error'])
 const logModule = ref<string>()
 const logKeyword = ref('')
 const logAutoScroll = ref(true)
@@ -393,7 +348,7 @@ async function refreshAfterRestart(): Promise<void> {
         continue
       }
 
-      await Promise.all([load(), loadLogLevel(), loadConfigJson()])
+      await Promise.all([load(), loadConfigJson()])
       return
     } catch {
       // 控制台短暂不可用，继续等下一轮
@@ -435,7 +390,6 @@ async function restartProgram(): Promise<void> {
 
 onMounted(() => {
   load()
-  loadLogLevel()
   loadConfigJson()
   void pollLogs()
   void pollStatus()
@@ -568,25 +522,19 @@ async function runLike(): Promise<void> {
       <template #header>
         <div class="card-header">
           <span class="group-name">日志</span>
-          <span class="hint">等级同时决定终端输出与下方日志的记录范围（关闭即不记录）</span>
+          <span class="hint">全部等级都会记录；下方筛选只影响本页显示，默认隐藏 debug</span>
         </div>
       </template>
 
-      <div class="row">
-        <span class="label">日志等级</span>
-        <el-select v-model="logLevel" :loading="logSaving" style="width: 220px" @change="saveLogLevel">
-          <el-option v-for="lv in logLevels" :key="lv.value" :label="lv.label" :value="lv.value" />
-        </el-select>
-      </div>
-
       <div class="row log-toolbar">
+        <span class="task-hint">显示</span>
         <el-select
           v-model="logLevelFilter"
           multiple
           collapse-tags
           collapse-tags-tooltip
           size="small"
-          placeholder="日志等级"
+          placeholder="全部等级"
           style="width: 200px"
         >
           <el-option v-for="level in RECORD_LEVELS" :key="level" :label="level" :value="level" />
@@ -613,7 +561,7 @@ async function runLike(): Promise<void> {
       </div>
 
       <div ref="logViewRef" class="log-view">
-        <p v-if="filteredLogs.length === 0" class="log-empty">没有匹配的日志</p>
+        <p v-if="filteredLogs.length === 0" class="log-empty">没有匹配的日志（debug 默认不显示）</p>
         <div v-for="record in filteredLogs" :key="record.seq" class="log-line">
           <span class="log-time">{{ formatClock(record.time) }}</span>
           <span class="log-level" :class="`lv-${record.level}`">{{ record.level }}</span>

@@ -35,22 +35,22 @@ MAX_BODY = 4 * 1024 * 1024
 
 # 控制行前缀，必须与 standalone/control.ts 的 CONTROL_PREFIX 一致
 CONTROL_PREFIX = "\x1eBLTHCTL"
+# 日志行的等级标记，必须与 standalone/polyfill.ts 的 LOG_LEVEL_MARK 一致
+LEVEL_MARK = re.compile(r"^\x1eBLTHLVL:(debug|info|warn|error)\x1e ?")
 # Logger 的前缀形如 BLTH[2026/11/10 11:00:00][Standalone][DailyTask]:，冒号之后是正文
 LOGGER_PREFIX = re.compile(r"^BLTH\[[^\]]*\]((?:\[[^\]]*\])*):")
-# Node 的 console.warn / console.error 都走 stderr，只能按文本区分严重程度
+# 未带标记的 stderr（崩溃栈、Node 自身的告警）只能按文本区分严重程度
 ERROR_HINTS = ("出错", "失败", "错误", "error", "Error")
 
 # 由控制台转发到任务进程的操作；其余接口（状态、日志、重启、页面）由控制台自己处理
 PROXY_GET = {
     "/api/tasks": "tasks.get",
     "/api/modules": "modules.get",
-    "/api/config": "config.get",
     "/api/like": "like.get",
 }
 PROXY_POST = {
     "/api/tasks": "tasks.set",
     "/api/modules": "modules.set",
-    "/api/config": "config.set",
     "/api/like": "like.set",
 }
 # 收集点赞候选要逐个探测直播间，耗时与房间数成正比
@@ -282,7 +282,11 @@ class Supervisor:
                 if stream_level == "info" and self.control.on_line(line):
                     continue
                 level = "info"
-                if stream_level == "stderr":
+                marked = LEVEL_MARK.match(line)
+                if marked:
+                    level = marked.group(1)
+                    line = line[marked.end():]
+                elif stream_level == "stderr":
                     level = "error" if any(hint in line for hint in ERROR_HINTS) else "warn"
                 self.logs.append(level, line)
         finally:

@@ -9,7 +9,7 @@ import type BaseModule from '@/modules/BaseModule'
 import * as defaultModules from '@/modules/default'
 import * as dailyModules from '@/modules/dailyTasks'
 import { useBiliStore, useModuleStore } from '@/stores'
-import { isLogLevel, options, setLogLevel } from './config'
+import { options } from './config'
 import { startControlChannel } from './control'
 import { getCriticalError, loadModule, runModule, startModules, type ModulePlan } from './runner'
 import { storage } from './storage'
@@ -65,12 +65,6 @@ function seedStorage(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  // 控制台保存的日志等级优先于环境变量缺省值
-  const persisted: unknown = storage.get<string>('logLevel', '')
-  if (isLogLevel(persisted)) {
-    setLogLevel(persisted)
-  }
-
   logger.log(`数据目录：${options.dataDir}`)
   logger.log(`cookie 文件：${options.cookieFile}`)
 

@@ -1,9 +1,7 @@
 import Logger from '@/library/logger'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import { useModuleStore } from '@/stores'
-import { getLogLevel, isLogLevel, setLogLevel } from './config'
 import { runModule } from './runner'
-import { storage } from './storage'
 
 /**
  * 任务进程与控制台之间的控制通道。
@@ -469,21 +467,6 @@ async function dispatch(action: string, payload: Record<string, any>): Promise<C
       } catch (error) {
         return fail(400, messageOf(error))
       }
-    }
-
-    case 'config.get':
-      return ok({ logLevel: getLogLevel() })
-
-    case 'config.set': {
-      const level: unknown = payload.logLevel
-      if (!isLogLevel(level)) {
-        return fail(400, '非法的日志等级')
-      }
-      // 先按旧等级打印确认，再切换到新等级（否则在设置 none/error 时自身反而不可见）
-      logger.log(`日志等级已调整为 ${level}`)
-      setLogLevel(level)
-      storage.set('logLevel', level)
-      return ok({ logLevel: getLogLevel() })
     }
 
     case 'like.get':
