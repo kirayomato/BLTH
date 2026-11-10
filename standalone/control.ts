@@ -1,6 +1,8 @@
 import Logger from '@/library/logger'
+import { CANCELLED_NICK_NAME } from '@/library/utils'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
-import { useModuleStore } from '@/stores'
+import { useBiliStore, useModuleStore } from '@/stores'
+import type { ModuleConfig, RoomidEntry } from '@/types'
 import { runModule } from './runner'
 
 /**
@@ -446,6 +448,110 @@ function runLikes(payload: Record<string, any>): ControlReply {
   return { status: 202, data: { accepted: true } }
 }
 
+/* ---------------- 粉丝勋章名单 ---------------- */
+
+/** 名单编辑用的直播间行，字段与网页版的 MedalRow 一致 */
+interface MedalRow {
+  roomid: number
+  uid: number
+  nick_name: string
+  medal_name: string
+  medal_level: number
+  avatar: string
+  is_lighted: boolean
+  is_canceled: boolean
+}
+
+/** 名单相关配置节点：白/黑名单开关与两个房间名单都在这里 */
+function medalTasksConfig(): ModuleConfig['DailyTasks']['LiveTasks']['medalTasks'] {
+  return useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks
+}
+
+/**
+ * 把粉丝勋章快照转成名单表格的行
+ *
+ * 账号已注销的昵称用名单里存的原名兜底，便于与历史配置对上。
+ */
+function medalRows(): MedalRow[] {
+  const config = medalTasksConfig()
+  const storedName = new Map<number, string>()
+  for (const entry of [...config.roomidList, ...config.roomidList2]) {
+    if (entry.name && !storedName.has(entry.roomid)) {
+      storedName.set(entry.roomid, entry.name)
+    }
+  }
+
+  return useBiliStore().filteredFansMedals.map((medal) => {
+    const roomid = medal.room_info.room_id
+    const isCanceled = medal.anchor_info.nick_name === CANCELLED_NICK_NAME
+    return {
+      roomid,
+      uid: medal.medal.target_id,
+      nick_name: isCanceled
+        ? storedName.get(roomid) || CANCELLED_NICK_NAME
+        : medal.anchor_info.nick_name,
+      medal_name: medal.medal.medal_name,
+      medal_level: medal.medal.level,
+      avatar: medal.anchor_info.avatar,
+      is_lighted: medal.medal.is_lighted === 1,
+      is_canceled: isCanceled,
+    }
+  })
+}
+
+function readMedalLists(): ControlReply {
+  const config = medalTasksConfig()
+  return ok({
+    rows: medalRows(),
+    isWhiteList: config.isWhiteList,
+    roomidList: config.roomidList.map((entry) => entry.roomid),
+    roomidList2: config.roomidList2.map((entry) => entry.roomid),
+    status: useBiliStore().fansMedalsStatus ?? '',
+  })
+}
+
+function writeMedalList(payload: Record<string, any>): ControlReply {
+  const mode: unknown = payload.mode
+  if (mode !== 'list' && mode !== 'priority') {
+    return fail(400, 'mode 只能是 list 或 priority')
+  }
+
+  const raw: unknown = payload.roomids
+  if (!Array.isArray(raw)) {
+    return fail(400, 'roomids 必须是数组')
+  }
+
+  const roomids = raw.filter(
+    (roomid): roomid is number =>
+      typeof roomid === 'number' && Number.isInteger(roomid) && roomid > 0,
+  )
+
+  const config = medalTasksConfig()
+
+  // 白名单开关只作用于主名单，优先名单与它无关
+  if (mode === 'list' && typeof payload.isWhiteList === 'boolean') {
+    config.isWhiteList = payload.isWhiteList
+  }
+
+  // 用户名允许留空：运行时获取到粉丝勋章后会自动补全
+  const nameByRoomid = new Map(medalRows().map((row) => [row.roomid, row.nick_name]))
+  const entries: RoomidEntry[] = roomids.map((roomid) => ({
+    roomid,
+    name: nameByRoomid.get(roomid) ?? '',
+  }))
+
+  if (mode === 'priority') {
+    config.roomidList2 = entries
+  } else {
+    config.roomidList = entries
+  }
+
+  const label = mode === 'priority' ? '优先名单' : '黑白名单'
+  logger.log(`名单已更新：${label} ${entries.length} 个直播间`)
+
+  return readMedalLists()
+}
+
 async function dispatch(action: string, payload: Record<string, any>): Promise<ControlReply> {
   switch (action) {
     case 'tasks.get':
@@ -474,6 +580,12 @@ async function dispatch(action: string, payload: Record<string, any>): Promise<C
 
     case 'like.set':
       return runLikes(payload)
+
+    case 'medals.get':
+      return readMedalLists()
+
+    case 'medals.set':
+      return writeMedalList(payload)
 
     default:
       return fail(404, `未知操作 ${action}`)

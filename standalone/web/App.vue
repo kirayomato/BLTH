@@ -349,6 +349,11 @@ async function refreshAfterRestart(): Promise<void> {
       }
 
       await Promise.all([load(), loadConfigJson()])
+      // 名单是懒加载的：新进程的完成状态可能变了，先标记失效，等下次展开再取
+      medalLoaded.value = false
+      if (medalExpanded.value) {
+        await loadMedals()
+      }
       return
     } catch {
       // 控制台短暂不可用，继续等下一轮
@@ -399,6 +404,306 @@ onUnmounted(() => {
   window.clearTimeout(logTimer)
   window.clearTimeout(statusTimer)
 })
+
+/* ---------------- 粉丝勋章名单 ---------------- */
+
+interface MedalRow {
+  roomid: number
+  uid: number
+  nick_name: string
+  medal_name: string
+  medal_level: number
+  avatar: string
+  is_lighted: boolean
+  is_canceled: boolean
+}
+
+interface MedalListSnapshot {
+  rows: MedalRow[]
+  isWhiteList: boolean
+  roomidList: number[]
+  roomidList2: number[]
+  status: string
+}
+
+const medalTableRef = ref<InstanceType<typeof ElTable>>()
+const medalRows = ref<MedalRow[]>([])
+const medalIsWhiteList = ref(false)
+/** 正在编辑的名单：主名单（白名单 / 黑名单）或优先名单 */
+const medalMode = ref<'list' | 'priority'>('list')
+/** 两个名单的房间号，数组顺序即写入顺序 */
+const medalListRoomids = ref<number[]>([])
+const medalPriorityRoomids = ref<number[]>([])
+const medalStatus = ref('')
+const medalLoading = ref(false)
+const medalSaving = ref(false)
+/** 卡片默认收起：名单数据量较大，展开时才向后端取一次 */
+const medalExpanded = ref(false)
+/** 是否已成功取过名单，收起后再次展开不必重取 */
+const medalLoaded = ref(false)
+
+/** 收起时在标题旁显示概况，让用户不必展开也能知道名单规模 */
+const medalSummary = computed(() => {
+  if (medalLoading.value) {
+    return '加载中…'
+  }
+  if (!medalLoaded.value) {
+    return '点击加载'
+  }
+  return `黑白名单 ${medalListRoomids.value.length} · 优先名单 ${medalPriorityRoomids.value.length}`
+})
+const medalSearchText = ref('')
+const medalFilter = ref<'all' | 'lighted' | 'unlighted' | 'checked' | 'unchecked'>('all')
+
+const activeMedalRoomids = computed(() =>
+  medalMode.value === 'priority' ? medalPriorityRoomids.value : medalListRoomids.value,
+)
+
+/** 已勾选的按名单顺序排在前面，其余保持勋章列表原顺序 */
+const orderedMedalRows = computed(() => {
+  const order = new Map(activeMedalRoomids.value.map((roomid, index) => [roomid, index]))
+  return [...medalRows.value].sort((a, b) => {
+    const left = order.get(a.roomid)
+    const right = order.get(b.roomid)
+    if (left !== undefined && right !== undefined) return left - right
+    if (left !== undefined) return -1
+    if (right !== undefined) return 1
+    return 0
+  })
+})
+
+const medalFilterActive = computed(
+  () => medalSearchText.value.trim() !== '' || medalFilter.value !== 'all',
+)
+
+const filteredMedalRows = computed(() => {
+  let rows = [...orderedMedalRows.value]
+
+  const keyword = medalSearchText.value.trim().toLowerCase()
+  if (keyword) {
+    rows = rows.filter(
+      (row) =>
+        row.nick_name.toLowerCase().includes(keyword) ||
+        row.medal_name.toLowerCase().includes(keyword) ||
+        String(row.roomid).includes(keyword) ||
+        String(row.uid).includes(keyword),
+    )
+  }
+
+  const filter = medalFilter.value
+  if (filter === 'lighted' || filter === 'unlighted') {
+    rows = rows.filter((row) => row.is_lighted === (filter === 'lighted'))
+  } else if (filter === 'checked' || filter === 'unchecked') {
+    // 勾选状态随编辑实时变化：在「仅已勾选」下取消勾选后该行会立即移出显示
+    const checked = new Set(activeMedalRoomids.value)
+    rows = rows.filter((row) => checked.has(row.roomid) === (filter === 'checked'))
+  }
+
+  return rows
+})
+
+/** 保存防抖：连续勾选合并成一次请求 */
+let medalSaveTimer = 0
+
+function scheduleMedalSave(): void {
+  window.clearTimeout(medalSaveTimer)
+  medalSaveTimer = window.setTimeout(() => void saveMedals(), 300)
+}
+
+onUnmounted(() => window.clearTimeout(medalSaveTimer))
+
+/**
+ * 提交名单
+ *
+ * mode 缺省取当前编辑的名单；切换白名单开关时显式传 list，
+ * 否则在优先名单下改开关会把主名单当成优先名单提交。
+ */
+async function saveMedals(mode: 'list' | 'priority' = medalMode.value): Promise<void> {
+  medalSaving.value = true
+
+  try {
+    const roomids = mode === 'priority' ? medalPriorityRoomids.value : medalListRoomids.value
+    const response = await fetch('/api/medals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode,
+        isWhiteList: medalIsWhiteList.value,
+        roomids,
+      }),
+    })
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+  } catch (err) {
+    ElMessage.error(`保存名单失败：${(err as Error).message}`)
+    // 服务端没接受改动，重新读取以免页面与磁盘不一致
+    await loadMedals()
+  } finally {
+    medalSaving.value = false
+  }
+}
+
+function writeMedalRoomids(roomids: number[]): void {
+  if (medalMode.value === 'priority') {
+    medalPriorityRoomids.value = roomids
+  } else {
+    medalListRoomids.value = roomids
+  }
+  scheduleMedalSave()
+}
+
+/** 按当前名单勾选表格行，只处理显示中的行 */
+function syncMedalSelection(): void {
+  const checked = new Set(activeMedalRoomids.value)
+  for (const row of filteredMedalRows.value) {
+    medalTableRef.value?.toggleRowSelection(row, checked.has(row.roomid))
+  }
+}
+
+async function loadMedals(): Promise<void> {
+  medalLoading.value = true
+
+  try {
+    const response = await fetch('/api/medals', { cache: 'no-store' })
+    const data = (await response.json()) as Partial<MedalListSnapshot> & { error?: string }
+
+    if (!response.ok) {
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+
+    medalRows.value = data.rows ?? []
+    medalIsWhiteList.value = data.isWhiteList ?? false
+    medalListRoomids.value = data.roomidList ?? []
+    medalPriorityRoomids.value = data.roomidList2 ?? []
+    medalStatus.value = data.status ?? ''
+    medalLoaded.value = true
+
+    await nextTick()
+    syncMedalSelection()
+  } catch (err) {
+    medalRows.value = []
+    ElMessage.error(`读取粉丝勋章失败：${(err as Error).message}`)
+  } finally {
+    medalLoading.value = false
+  }
+}
+
+/**
+ * 展开/收起名单卡片
+ *
+ * 首次展开才取数据；表格用 v-if 重建，收起后再次展开需要把勾选状态补回去。
+ * 读取失败时保持「未加载」，下次展开会重试。
+ */
+async function toggleMedalPanel(): Promise<void> {
+  if (medalExpanded.value) {
+    medalExpanded.value = false
+    return
+  }
+
+  medalExpanded.value = true
+  if (!medalLoaded.value) {
+    await loadMedals()
+    return
+  }
+
+  await nextTick()
+  syncMedalSelection()
+}
+
+// 搜索/筛选后表格行会被替换，重新按名单勾选，避免勾选状态丢失
+watch(filteredMedalRows, () => void nextTick(syncMedalSelection))
+
+/**
+ * 表格勾选变化
+ *
+ * 搜索/筛选隐藏的行保持原勾选状态，显示的行以本次选择为准；
+ * 已勾选的保持原有写入顺序，新勾选的排在末尾。
+ */
+function handleMedalSelectionChange(rows: MedalRow[]): void {
+  const visible = new Set(filteredMedalRows.value.map((row) => row.roomid))
+  const selected = new Set(rows.map((row) => row.roomid))
+
+  const roomids = activeMedalRoomids.value.filter(
+    (roomid) => !visible.has(roomid) || selected.has(roomid),
+  )
+  const known = new Set(roomids)
+  for (const row of medalRows.value) {
+    if (selected.has(row.roomid) && !known.has(row.roomid)) {
+      roomids.push(row.roomid)
+      known.add(row.roomid)
+    }
+  }
+
+  writeMedalRoomids(roomids)
+}
+
+/** 点击整行切换勾选；复选框与链接自己处理，不再重复切换 */
+function handleMedalRowClick(row: MedalRow, _column: unknown, event: Event): void {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.el-checkbox, a, button')) return
+
+  const roomids = [...activeMedalRoomids.value]
+  const index = roomids.indexOf(row.roomid)
+  if (index >= 0) {
+    roomids.splice(index, 1)
+    medalTableRef.value?.toggleRowSelection(row, false)
+  } else {
+    roomids.push(row.roomid)
+    medalTableRef.value?.toggleRowSelection(row, true)
+  }
+  writeMedalRoomids(roomids)
+}
+
+/** 切换编辑目标：换了名单要按新名单重新勾选 */
+async function switchMedalMode(mode: 'list' | 'priority'): Promise<void> {
+  if (medalMode.value === mode) return
+  medalMode.value = mode
+  await nextTick()
+  medalTableRef.value?.clearSelection()
+  syncMedalSelection()
+}
+
+/** 白名单开关只作用于主名单，提交时显式指定 list */
+function changeMedalWhiteList(): void {
+  void saveMedals('list')
+}
+
+/** 按勋章列表的原始顺序重排当前名单 */
+function resetMedalOrder(): void {
+  const checked = new Set(activeMedalRoomids.value)
+  writeMedalRoomids(
+    medalRows.value.filter((row) => checked.has(row.roomid)).map((row) => row.roomid),
+  )
+  ElMessage.success('已按表格顺序重排')
+}
+
+/** 顺序调整窗口 */
+const medalOrderVisible = ref(false)
+
+/** 已勾选的行，按写入顺序排列；勋章数据里没有的用房间号顶替 */
+const orderedCheckedRows = computed(() =>
+  activeMedalRoomids.value.map((roomid, index) => {
+    const row = medalRows.value.find((item) => item.roomid === roomid)
+    return {
+      roomid,
+      index,
+      nick_name: row?.nick_name ?? '',
+      medal_name: row?.medal_name ?? '',
+    }
+  }),
+)
+
+/** 与相邻项交换位置；index 是名单里的下标 */
+function moveMedalOrder(index: number, delta: number): void {
+  const roomids = [...activeMedalRoomids.value]
+  const target = index + delta
+  if (target < 0 || target >= roomids.length) return
+  ;[roomids[index], roomids[target]] = [roomids[target], roomids[index]]
+  writeMedalRoomids(roomids)
+}
 
 /* ---------------- 手动点赞 ---------------- */
 
@@ -469,8 +774,32 @@ function likePercent(row: LikeRoomCandidate): number {
   return Math.min(100, Math.round(((row.likeProgress as number) / total) * 100))
 }
 
+/**
+ * 头像地址：经控制台转发，只暴露同源地址
+ *
+ * B 站图床对来自本页面的 Referer 返回 403，也不给 CORS 头，浏览器直连取不到；
+ * 控制台带上正常站点 Referer 取回并缓存，接口可能给的协议相对形式也在这里补全。
+ */
+function avatarUrl(row: { avatar: string }): string {
+  const src = row.avatar
+  if (!src) return ''
+  const url = src.startsWith('//') ? `https:${src}` : src
+  return `/api/avatar?url=${encodeURIComponent(url)}`
+}
+
 function handleLikeSelectionChange(rows: LikeRoomCandidate[]): void {
   likeSelection.value = rows
+}
+
+/**
+ * 点击整行切换勾选。
+ *
+ * 复选框自己会切换、链接要跳转，这两类目标不再重复处理，否则一次点击等于切换两次。
+ */
+function handleLikeRowClick(row: LikeRoomCandidate, _column: unknown, event: Event): void {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.el-checkbox, a, button')) return
+  likeTableRef.value?.toggleRowSelection(row)
 }
 
 /** 提交选中的直播间，服务端在后台逐个点赞 */
@@ -577,6 +906,184 @@ async function runLike(): Promise<void> {
 
     <el-card shadow="never" class="card">
       <template #header>
+        <div class="card-header">
+          <button type="button" class="card-toggle" @click="toggleMedalPanel">
+            <span class="caret" :class="{ open: medalExpanded }">▸</span>
+            <span class="group-name">粉丝勋章名单</span>
+            <span v-if="!medalExpanded" class="task-hint">{{ medalSummary }}</span>
+          </button>
+          <span v-if="medalSaving" class="task-hint">保存中…</span>
+        </div>
+      </template>
+
+      <div v-if="medalExpanded">
+        <p class="hint">
+          名单决定哪些直播间参与【点亮熄灭勋章】与【观看直播】。勾选即写入配置，改动立即落盘生效。
+        </p>
+
+        <div class="row">
+          <el-switch
+            v-model="medalIsWhiteList"
+            active-text="白名单"
+            inactive-text="黑名单"
+            @change="changeMedalWhiteList"
+          />
+          <el-button
+            :type="medalMode === 'list' ? 'primary' : ''"
+            :loading="medalLoading"
+            @click="switchMedalMode('list')"
+          >
+            黑白名单（{{ medalListRoomids.length }}）
+          </el-button>
+          <el-button
+            :type="medalMode === 'priority' ? 'primary' : ''"
+            :loading="medalLoading"
+            @click="switchMedalMode('priority')"
+          >
+            优先名单（{{ medalPriorityRoomids.length }}）
+          </el-button>
+        </div>
+
+        <p class="hint">
+          {{
+            medalMode === 'priority'
+              ? '优先名单：这些直播间排在勋章任务队列前面先执行。'
+              : medalIsWhiteList
+                ? '白名单：只对勾选的直播间执行勋章任务。'
+                : '黑名单：勾选的直播间不参与勋章任务。'
+          }}
+        </p>
+
+        <div class="row">
+          <el-input
+            v-model="medalSearchText"
+            class="medal-search"
+            placeholder="搜索昵称 / 粉丝勋章 / 房间号 / UID"
+            clearable
+          />
+          <el-select v-model="medalFilter" style="width: 160px">
+            <el-option label="全部" value="all" />
+            <el-option-group label="点亮状态">
+              <el-option label="仅已点亮" value="lighted" />
+              <el-option label="仅未点亮" value="unlighted" />
+            </el-option-group>
+            <el-option-group label="勾选状态">
+              <el-option label="仅已勾选" value="checked" />
+              <el-option label="仅未勾选" value="unchecked" />
+            </el-option-group>
+          </el-select>
+          <el-button @click="resetMedalOrder">恢复表格顺序</el-button>
+          <el-button @click="medalOrderVisible = true">调整顺序</el-button>
+        </div>
+
+        <p v-if="!medalLoading && medalRows.length === 0" class="hint">
+          还没有粉丝勋章数据{{
+            medalStatus === 'error'
+              ? '（获取失败，请检查 cookie 与运行日志）'
+              : '，请稍后刷新或查看运行日志'
+          }}。
+        </p>
+
+        <el-table
+          v-else
+          ref="medalTableRef"
+          v-loading="medalLoading"
+          :data="filteredMedalRows"
+          :row-key="(row: MedalRow) => String(row.roomid)"
+          size="small"
+          :max-height="420"
+          class="like-table"
+          :empty-text="medalFilterActive ? '没有匹配的粉丝勋章' : '没有粉丝勋章'"
+          @select="handleMedalSelectionChange"
+          @select-all="handleMedalSelectionChange"
+          @row-click="handleMedalRowClick"
+        >
+          <el-table-column type="selection" width="45" />
+          <el-table-column label="主播" min-width="160">
+            <template #default="scope">
+              <div class="anchor-cell">
+                <el-avatar :size="24" :src="avatarUrl(scope.row)" />
+                <span class="anchor-name">{{ scope.row.nick_name }}</span>
+                <el-tag v-if="scope.row.is_canceled" type="info" size="small" effect="plain">
+                  已注销
+                </el-tag>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="medal_name" label="粉丝勋章" min-width="100" />
+          <el-table-column prop="medal_level" label="等级" width="70" align="center" />
+          <el-table-column label="点亮" width="90" align="center">
+            <template #default="scope">
+              <el-tag :type="scope.row.is_lighted ? 'success' : 'info'" size="small" effect="plain">
+                {{ scope.row.is_lighted ? '已点亮' : '未点亮' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="房间号" width="110">
+            <template #default="scope">
+              <a
+                class="link"
+                :href="`https://live.bilibili.com/${scope.row.roomid}`"
+                target="_blank"
+                rel="noreferrer"
+                @click.stop
+              >
+                {{ scope.row.roomid }}
+              </a>
+            </template>
+          </el-table-column>
+          <el-table-column label="UID" width="110">
+            <template #default="scope">
+              <a
+                class="link"
+                :href="`https://space.bilibili.com/${scope.row.uid}`"
+                target="_blank"
+                rel="noreferrer"
+                @click.stop
+              >
+                {{ scope.row.uid }}
+              </a>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <p v-if="medalRows.length > 0" class="hint">
+          已选 {{ activeMedalRoomids.length }} 个；写入顺序即任务执行顺序，新勾选的排在末尾。
+        </p>
+      </div>
+    </el-card>
+
+    <el-dialog
+      v-model="medalOrderVisible"
+      title="调整写入顺序"
+      width="460px"
+      :lock-scroll="false"
+    >
+      <p class="hint">顺序决定任务执行的先后，新勾选的排在末尾。</p>
+      <p v-if="orderedCheckedRows.length === 0" class="hint">还没有勾选任何直播间。</p>
+      <div v-for="item in orderedCheckedRows" :key="item.roomid" class="order-item">
+        <span class="order-index">{{ item.index + 1 }}</span>
+        <span class="order-name">{{ item.nick_name || item.roomid }}</span>
+        <span class="task-hint">{{ item.roomid }}</span>
+        <el-button
+          size="small"
+          :disabled="item.index === 0"
+          @click="moveMedalOrder(item.index, -1)"
+        >
+          上移
+        </el-button>
+        <el-button
+          size="small"
+          :disabled="item.index === orderedCheckedRows.length - 1"
+          @click="moveMedalOrder(item.index, 1)"
+        >
+          下移
+        </el-button>
+      </div>
+    </el-dialog>
+
+    <el-card shadow="never" class="card">
+      <template #header>
         <span class="group-name">点赞（手动 / 每日自动）</span>
       </template>
 
@@ -601,9 +1108,30 @@ async function runLike(): Promise<void> {
         :max-height="360"
         class="like-table"
         @selection-change="handleLikeSelectionChange"
+        @row-click="handleLikeRowClick"
       >
         <el-table-column type="selection" width="45" />
-        <el-table-column prop="nick_name" label="昵称" min-width="100" />
+        <el-table-column label="主播" min-width="150">
+          <template #default="scope">
+            <div class="anchor-cell">
+              <el-avatar :size="24" :src="avatarUrl(scope.row)" />
+              <span class="anchor-name">{{ scope.row.nick_name }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="UID" width="110">
+          <template #default="scope">
+            <a
+              class="link"
+              :href="`https://space.bilibili.com/${scope.row.uid}`"
+              target="_blank"
+              rel="noreferrer"
+              @click.stop
+            >
+              {{ scope.row.uid }}
+            </a>
+          </template>
+        </el-table-column>
         <el-table-column prop="medal_name" label="粉丝勋章" min-width="90" />
         <el-table-column prop="medal_level" label="等级" width="60" align="center" />
         <el-table-column label="点亮" width="80" align="center">
@@ -640,7 +1168,19 @@ async function runLike(): Promise<void> {
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="roomid" label="房间号" width="100" />
+        <el-table-column label="房间号" width="100">
+          <template #default="scope">
+            <a
+              class="link"
+              :href="`https://live.bilibili.com/${scope.row.roomid}`"
+              target="_blank"
+              rel="noreferrer"
+              @click.stop
+            >
+              {{ scope.row.roomid }}
+            </a>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div v-if="likeCandidates.length > 0" class="row">
@@ -734,6 +1274,30 @@ async function runLike(): Promise<void> {
   justify-content: space-between;
 }
 
+/* 标题整体可点：点击区域不只是那个小三角 */
+.card-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.caret {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  transition: transform 0.15s;
+}
+
+.caret.open {
+  transform: rotate(90deg);
+}
+
 .hint {
   margin: 0;
   color: var(--el-text-color-secondary);
@@ -777,6 +1341,63 @@ async function runLike(): Promise<void> {
 
 .like-table {
   margin-top: 12px;
+}
+
+/* small 尺寸默认只有 4px 上下内边距，行挨得太紧；两张列表统一放宽 */
+.like-table :deep(.el-table__cell) {
+  padding: 8px 0;
+}
+
+.like-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+
+.anchor-cell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.anchor-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.medal-search {
+  flex: 1;
+  min-width: 200px;
+}
+
+.order-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.order-index {
+  width: 28px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.order-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .progress-text {

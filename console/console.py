@@ -24,10 +24,11 @@ import sys
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 CONSOLE_DIR = Path(__file__).resolve().parent
@@ -51,14 +52,93 @@ PROXY_GET = {
     "/api/tasks": "tasks.get",
     "/api/modules": "modules.get",
     "/api/like": "like.get",
+    "/api/medals": "medals.get",
 }
 PROXY_POST = {
     "/api/tasks": "tasks.set",
     "/api/modules": "modules.set",
     "/api/like": "like.set",
+    "/api/medals": "medals.set",
 }
 # 收集点赞候选要逐个探测直播间，耗时与房间数成正比
 LONG_ACTIONS = {"like.get"}
+
+# 头像代理：B 站图床对来自本机页面的 Referer 返回 403，也不带 CORS 头，
+# 浏览器直连必然失败。改由控制台带上正常站点 Referer 取回，页面只访问同源地址。
+AVATAR_HOSTS = ("hdslb.com", "bilibili.com")
+AVATAR_REFERER = "https://www.bilibili.com/"
+AVATAR_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+AVATAR_MAX_BYTES = 2 * 1024 * 1024
+AVATAR_CACHE_LIMIT = 300
+AVATAR_CACHE_SECONDS = 86400
+
+
+class AvatarCache:
+    """头像按 URL 缓存在内存。
+
+    名单每次展开都会重取一遍数据，头像 URL 不变时不必重复下载；
+    浏览器侧另有 ``max-age``，正常情况下连控制台都不会再来问。
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.items: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, url: str) -> tuple[bytes, str] | None:
+        with self.lock:
+            item = self.items.get(url)
+            if item is not None:
+                self.items.move_to_end(url)
+            return item
+
+    def put(self, url: str, item: tuple[bytes, str]) -> None:
+        with self.lock:
+            self.items[url] = item
+            self.items.move_to_end(url)
+            while len(self.items) > self.limit:
+                self.items.popitem(last=False)
+
+
+AVATAR_CACHE = AvatarCache(AVATAR_CACHE_LIMIT)
+
+
+def avatar_allowed(url: str) -> bool:
+    """只代理 B 站的图床，避免控制台被当成任意地址的取数跳板"""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    return any(host == base or host.endswith(f".{base}") for base in AVATAR_HOSTS)
+
+
+def fetch_avatar(url: str) -> tuple[bytes, str]:
+    request = Request(
+        url,
+        headers={
+            "Referer": AVATAR_REFERER,
+            "User-Agent": AVATAR_UA,
+            "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
+        },
+    )
+
+    with urlopen(request, timeout=8) as response:
+        # 只在最终地址仍属于白名单时接受内容，防止被 302 带到别处
+        if not avatar_allowed(response.geturl()):
+            raise ValueError("重定向到不受信任的地址")
+
+        content_type = (response.headers.get("Content-Type") or "").split(";")[0].strip()
+        if not content_type.startswith("image/"):
+            raise ValueError(f"返回的不是图片（{content_type or '无类型'}）")
+
+        data = response.read(AVATAR_MAX_BYTES + 1)
+
+    if len(data) > AVATAR_MAX_BYTES:
+        raise ValueError("图片超过大小上限")
+    return data, content_type
 
 
 class LogBuffer:
@@ -376,10 +456,13 @@ class Handler(BaseHTTPRequestHandler):
         # 访问日志会混进终端输出，这里保持安静
         pass
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(self, status: int, body: bytes, content_type: str, cache_seconds: int = 0) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
+        if cache_seconds > 0:
+            self.send_header("Cache-Control", f"public, max-age={cache_seconds}")
+        else:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -435,6 +518,25 @@ class Handler(BaseHTTPRequestHandler):
                 "text/plain; charset=utf-8",
             )
 
+    def _serve_avatar(self, url: str) -> None:
+        if not url or not avatar_allowed(url):
+            self._send_json(400, {"error": "只代理 B 站图床地址"})
+            return
+
+        cached = AVATAR_CACHE.get(url)
+        if cached is not None:
+            self._send(200, cached[0], cached[1], AVATAR_CACHE_SECONDS)
+            return
+
+        try:
+            data, content_type = fetch_avatar(url)
+        except Exception as err:  # 头像取不到只是显示成默认头像，不该影响页面其它功能
+            self._send_json(502, {"error": f"取头像失败：{err}"})
+            return
+
+        AVATAR_CACHE.put(url, (data, content_type))
+        self._send(200, data, content_type, AVATAR_CACHE_SECONDS)
+
     def do_GET(self) -> None:
         url = urlparse(self.path)
         path = url.path
@@ -457,6 +559,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             self._send_json(200, self.supervisor.status())
+            return
+
+        if path == "/api/avatar":
+            self._serve_avatar(parse_qs(url.query).get("url", [""])[0])
             return
 
         if path in PROXY_GET:

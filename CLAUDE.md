@@ -38,14 +38,25 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs  # 仅检查登录态，�
 ```
 
 控制台只监听回环地址（`http://127.0.0.1:8787`），提供完整配置页面：任务开关、配置 JSON、
-运行日志（按等级、模块、关键词筛选）、手动点赞与【重新启动任务】按钮。页面来自 `dist-web/index.html`
-（`build-web` 产物）；文件缺失时改发 `console/fallback.html` 精简页，仍能看日志和重启。任务进程本身不监听端口。
+粉丝勋章名单、运行日志（按等级、模块、关键词筛选）、手动点赞与【重新启动任务】按钮。
+页面来自 `dist-web/index.html`（`build-web` 产物）；文件缺失时改发 `console/fallback.html`
+精简页，仍能看日志和重启。任务进程本身不监听端口。
 
-需要碰到任务进程内状态的接口（`/api/tasks`、`/api/modules`、`/api/like`）
+需要碰到任务进程内状态的接口（`/api/tasks`、`/api/modules`、`/api/medals`、`/api/like`）
 由控制台经 **stdin/stdout 单行 JSON 控制通道** 转发给子进程：控制台从 stdin 写请求，
 任务进程把响应写成 stdout 上带 `\u001eBLTHCTL` 前缀的单行 JSON，其余行按普通日志处理。
 控制台按请求 id 匹配挂起请求，重启时会把挂起请求立刻作废，避免旧进程的响应串到新进程。
-`/api/status`、`/api/logs`、`/api/restart` 与静态页由控制台自己处理。
+`/api/status`、`/api/logs`、`/api/restart`、`/api/avatar` 与静态页由控制台自己处理。
+
+头像走 `/api/avatar?url=...` 由控制台代为取回：B 站图床对来自本机页面的 Referer 返回
+403 且不带 CORS 头，浏览器直连取不到。控制台只代理 `hdslb.com` / `bilibili.com`
+（含子域），带 `Referer: https://www.bilibili.com/` 请求，内存缓存 300 条并按
+`max-age=86400` 让浏览器自行缓存；取不到时返回 502，页面显示成默认头像，不影响其它功能。
+
+粉丝勋章名单（`medals.get` / `medals.set`）读的是任务进程里 `biliStore.filteredFansMedals`
+的快照，一份数据同时提供白/黑名单（`roomidList`）与优先名单（`roomidList2`）的编辑：
+写入时按房间号从快照补 `name`（查不到就留空，运行时由 `Default_FansMedals` 自动补全），
+`isWhiteList` 只随主名单提交。页面上的勾选顺序就是写入顺序，也就是任务执行顺序。
 
 **`data/storage.json` 的唯一写入方是任务进程**：store 的防抖 watch 落 `modules`。
 控制台从不写这个文件，因此不存在两边并发覆盖，也不需要「等旧进程
