@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage, ElTable } from 'element-plus'
+import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import type {
   LikeCandidateSnapshot,
   LikeRoomCandidate,
@@ -342,6 +342,39 @@ async function saveConfigJson(): Promise<void> {
   }
 }
 
+/* ---------------- 重新加载 ---------------- */
+
+const reloading = ref(false)
+
+async function reloadProgram(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '会重新读取 data/storage.json 与 cookie.txt 并重新运行任务。正在跑的任务会被临时关闭，退出后按新配置重跑；进程不退出，日志保持连续。',
+      '重新加载',
+      { type: 'warning', confirmButtonText: '重新加载', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  reloading.value = true
+
+  try {
+    const response = await fetch('/api/reload', { method: 'POST' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    ElMessage.success('已开始重新加载，页面将自动刷新')
+    // 默认模块要重新拉一遍数据，留出时间让日志先出现；刷新后仍可在日志里看进度
+    await new Promise((resolve) => window.setTimeout(resolve, 1200))
+    location.reload()
+  } catch (err) {
+    ElMessage.error(`重新加载失败：${(err as Error).message}`)
+    reloading.value = false
+  }
+}
+
 onMounted(() => {
   load()
   loadLogLevel()
@@ -461,6 +494,9 @@ async function runLike(): Promise<void> {
         <h1>BLTH 配置</h1>
         <p class="hint">此处可调整任务开关与少量开关型参数；其余任务参数（投币数量、观看时长、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改</p>
       </div>
+      <el-button type="danger" plain :loading="reloading" @click="reloadProgram">
+        重新加载
+      </el-button>
     </header>
 
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
@@ -524,7 +560,7 @@ async function runLike(): Promise<void> {
       </div>
 
       <p class="hint log-footer">
-        内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条
+        内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条；重新加载不会清空
       </p>
     </el-card>
 

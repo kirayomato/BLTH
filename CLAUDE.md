@@ -36,18 +36,28 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs   # 仅检查登录态，�
 ```
 
 启动后访问 `http://127.0.0.1:8787` 打开配置页面，可以开关各项任务，调整日志等级
-（debug / info / warn / error / 关闭），查看运行日志，编辑配置 JSON；改动即时生效并落盘。
+（debug / info / warn / error / 关闭），查看运行日志，编辑配置 JSON，以及重新加载配置；改动即时生效并落盘。
 页面只监听回环地址。日志等级同时决定终端输出、页面日志与 `data/blth.log` 的记录范围（关闭即不记录）。
 点赞任务改为手动运行：模块运行（含打开点赞开关、手动重跑）时会先查好可点赞的直播间，
 页面点【获取可点赞直播间】/【选择直播间点赞】直接展示这份结果，不再现查；
 点赞执行完成或跨天后清空，执行时仍按原来的逻辑逐个房间、逐轮重新确认。
 
 运行日志：进程内存保留最近 1000 条供页面按 `seq` 增量拉取，同时追加写入 `data/blth.log`，
-超过 5 MB 轮转为 `blth.log.1`（只留一份备份）。只有真正结束进程再启动时内存日志才从头开始，页面靠会话标识识别换进程，序号从头也不影响增量。
+超过 5 MB 轮转为 `blth.log.1`（只留一份备份）。页面上的【重新加载】不清空日志；
+只有真正结束进程再启动时内存日志才从头开始，页面靠会话标识识别换进程，序号从头也不影响增量。
 
 配置 JSON：编辑的是 `data/storage.json` 里的 `modules` 子树，保存时就地改写
 `moduleConfig`（保留各模块持有的节点引用）再经 store 的防抖 watch 落盘；缺 `DailyTasks`
 的文本会被拒绝，避免误删把任务配置清空。`cache`/`ui`/`logLevel` 不在编辑范围内。
+
+重新加载（`POST /api/reload`）：进程内重读 `data/storage.json` 与 `cookie.txt`，就地覆盖
+`moduleConfig` 后按启动流程重新实例化、重新调度。PID、终端归属、日志缓冲与配置页面连接都不变，
+在 screen 里运行也不会把进程跑丢。
+
+在途任务不能从外部中断，重载时用 `toRaw` 临时把它们的 `enabled` / `likeEnabled` /
+`danmuEnabled` 置为 false（不走响应式赋值，避免 store 的 deep watch 把 false 落盘），让循环在
+下一个检查点自行退出；这些任务本轮不重启，退出后由 `runModule` 的代次收尾恢复开关、补一个新
+实例立即按新配置重新评估。今天已完成的任务会被模块自己的完成标记挡掉，不会重复扣币或兑换。
 
 构建分两步：`vite.web.config.ts` 先构建 `standalone/web` 得到内联了全部脚本与样式的单个 HTML
 （`dist-web/`），`vite.standalone.config.ts` 再把该 HTML 嵌进可执行文件。两者由

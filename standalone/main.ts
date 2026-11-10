@@ -10,13 +10,7 @@ import * as defaultModules from '@/modules/default'
 import * as dailyModules from '@/modules/dailyTasks'
 import { useBiliStore, useModuleStore } from '@/stores'
 import { options } from './config'
-import {
-  getCriticalError,
-  loadModule,
-  registerTaskModules,
-  runModule,
-  startWatchdog,
-} from './runner'
+import { getCriticalError, loadModule, registerReloadPlan, runModule, startModules } from './runner'
 import { startConfigServer } from './server'
 import { storage } from './storage'
 
@@ -77,54 +71,15 @@ async function bootstrap(): Promise<void> {
   useModuleStore()
   logger.log(`模块配置：${storage.path}`)
 
-  // 登记需要兜底调度与看门狗保护的任务模块
-  registerTaskModules(TASK_MODULE_NAMES)
+  // 模块清单由入口持有，重载时调度层按这份清单重新实例化
+  registerReloadPlan({
+    moduleMap,
+    defaultNames: DEFAULT_MODULE_NAMES,
+    taskNames: TASK_MODULE_NAMES,
+  })
 
-  // 默认模块按序完成首次运行，任务模块依赖它们产出的数据
-  for (const name of DEFAULT_MODULE_NAMES) {
-    const module = moduleMap[name]
-    if (!module) {
-      logger.error(`未找到默认模块 ${name}`)
-      continue
-    }
+  await startModules()
 
-    const instance = loadModule(module, name)
-    if (instance) {
-      await runModule(name, instance)
-    }
-  }
-
-  const criticalError = getCriticalError()
-  if (criticalError) {
-    // 不直接退出：cookie 失效一类的问题下，配置页面恰好是排查所需的入口
-    logger.warn(`默认模块发生致命错误，本次不启动任务：${criticalError.message}`)
-  }
-
-  // 任务模块并行启动，各自在内部安排后续运行
-  const started: string[] = []
-  if (!criticalError) {
-    for (const name of TASK_MODULE_NAMES) {
-      const module = moduleMap[name]
-      if (!module) {
-        logger.error(`未找到任务模块 ${name}`)
-        continue
-      }
-
-      const instance = loadModule(module, name)
-      if (instance) {
-        void runModule(name, instance)
-        started.push(name)
-      }
-    }
-  }
-
-  if (started.length === 0 && !criticalError) {
-    logger.warn('没有启用任何任务，可在配置页面中开启')
-  } else if (started.length > 0) {
-    logger.log(`已启用 ${started.length} 项任务：${started.join('、')}`)
-  }
-
-  startWatchdog()
   logger.log('启动完成，进程将常驻运行，按 Ctrl+C 退出')
 }
 

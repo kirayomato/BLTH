@@ -88,6 +88,11 @@ export function loadCookies(): Record<string, string> {
   return cached
 }
 
+/** 丢弃缓存，下次读取重新解析文件（cookie.txt 可能已被替换） */
+export function resetCookieCache(): void {
+  cached = undefined
+}
+
 /** 拼成请求头可用的 Cookie 字段值 */
 export function cookieHeader(): string {
   return Object.entries(loadCookies())

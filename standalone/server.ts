@@ -6,11 +6,14 @@ import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import { getLogLevel, isLogLevel, options, setLogLevel, type LogLevel } from './config'
 import { isPlainObject, overwriteConfig } from './config-merge'
 import { getLogRecords, logFilePath, logSession } from './logs'
-import { runModule } from './runner'
+import { reloadModules, runModule } from './runner'
 import { configPageHtml } from './web-page'
 import { storage } from './storage'
 
 const logger = new Logger('Server')
+
+/** 重载进行中，避免连点叠加多轮调度 */
+let reloading = false
 
 interface TaskEntry {
   /** 指向 moduleConfig 中承载开关值的对象，顺序即配置层级 */
@@ -474,6 +477,23 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       sendJson(response, 200, { logLevel: getLogLevel() })
       return
     }
+  }
+
+  if (url === '/api/reload' && request.method === 'POST') {
+    if (reloading) {
+      sendJson(response, 409, { error: '正在重新加载' })
+      return
+    }
+
+    reloading = true
+    // 重载要等默认模块的接口请求返回，不能拖住这次响应
+    sendJson(response, 202, { accepted: true })
+    void reloadModules()
+      .catch((error: Error) => logger.error(`重新加载失败：${error.message}`))
+      .finally(() => {
+        reloading = false
+      })
+    return
   }
 
   response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })

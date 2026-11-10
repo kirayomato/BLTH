@@ -15,7 +15,8 @@ if (!process.env.TZ) {
   process.env.TZ = 'Asia/Shanghai'
 }
 
-const cookies = loadCookiesOrExit()
+// 启动时先校验一次 cookie 文件，缺失或格式错误直接退出
+loadCookiesOrExit()
 
 installWindow()
 installDocument()
@@ -90,10 +91,12 @@ function installCookieStore(): void {
 
   Object.defineProperty(globalThis, 'cookieStore', {
     value: {
+      // 每次取用都走 loadCookies：它自己带缓存，重载配置时清掉缓存即可读到新 cookie
       async getAll() {
-        return Object.entries(cookies).map(([name, value]) => entry(name, value))
+        return Object.entries(loadCookies()).map(([name, value]) => entry(name, value))
       },
       async get(name: string) {
+        const cookies = loadCookies()
         return Object.prototype.hasOwnProperty.call(cookies, name)
           ? entry(name, cookies[name])
           : undefined

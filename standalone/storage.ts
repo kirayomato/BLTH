@@ -39,6 +39,11 @@ class JsonStorage {
     return Object.keys(this.load())
   }
 
+  /** 丢弃内存缓存，下次读取重新解析文件（文件可能已被外部改动） */
+  public reload(): void {
+    this.data = undefined
+  }
+
   public flush(): void {
     const directory = dirname(this.file)
     if (!existsSync(directory)) {
