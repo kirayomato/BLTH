@@ -39,7 +39,7 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs  # 仅检查登录态，�
 
 控制台只监听回环地址（`http://127.0.0.1:8787`），提供完整配置页面：任务开关、配置 JSON、
 运行日志（按等级、模块、关键词筛选）、手动点赞与【重新启动任务】按钮。页面来自 `dist-web/index.html`
-（`build-web` 产物）；文件缺失时控制台给出一个精简页，仍能看日志和重启。任务进程本身不监听端口。
+（`build-web` 产物）；文件缺失时改发 `console/fallback.html` 精简页，仍能看日志和重启。任务进程本身不监听端口。
 
 需要碰到任务进程内状态的接口（`/api/tasks`、`/api/modules`、`/api/like`）
 由控制台经 **stdin/stdout 单行 JSON 控制通道** 转发给子进程：控制台从 stdin 写请求，

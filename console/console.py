@@ -30,8 +30,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+CONSOLE_DIR = Path(__file__).resolve().parent
 MAX_RECORDS = 1000
 MAX_BODY = 4 * 1024 * 1024
+
+# 没有 dist-web 时使用的精简页
+FALLBACK_FILE = CONSOLE_DIR / "fallback.html"
 
 # 控制行前缀，必须与 standalone/control.ts 的 CONTROL_PREFIX 一致
 CONTROL_PREFIX = "\x1eBLTHCTL"
@@ -419,8 +423,17 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_page(self) -> None:
         if self.web_page.is_file():
             self._send(200, self.web_page.read_bytes(), "text/html; charset=utf-8")
+            return
+
+        # 精简页缺失时至少给一句可读的提示，而不是空白页
+        if FALLBACK_FILE.is_file():
+            self._send(200, FALLBACK_FILE.read_bytes(), "text/html; charset=utf-8")
         else:
-            self._send(200, FALLBACK_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(
+                500,
+                f"缺少 {FALLBACK_FILE}：先执行 npm run build-web，或恢复控制台的精简页".encode("utf-8"),
+                "text/plain; charset=utf-8",
+            )
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
@@ -471,79 +484,6 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(404, {"error": "Not Found"})
-
-
-FALLBACK_PAGE = """<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BLTH 控制台</title>
-<style>
-  body { margin: 0; padding: 24px; background: #f6f7f9; color: #1f2328;
-         font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-  h1 { margin: 0 0 4px; font-size: 20px; }
-  .sub { color: #656d76; margin-bottom: 20px; }
-  .card { background: #fff; border: 1px solid #d8dee4; border-radius: 8px;
-          padding: 16px; margin-bottom: 16px; }
-  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .status { font-weight: 600; }
-  button { padding: 8px 16px; border: 1px solid #cf222e; border-radius: 6px;
-           background: #fff; color: #cf222e; cursor: pointer; }
-  #logs { background: #fff; border: 1px solid #d8dee4; border-radius: 8px;
-          height: 55vh; overflow: auto; padding: 12px;
-          font: 12px/1.7 Consolas, monospace; white-space: pre-wrap; }
-  .warn { color: #9a6700; } .error { color: #cf222e; }
-</style>
-</head>
-<body>
-<h1>BLTH 控制台</h1>
-<div class="sub">找不到 dist-web/index.html，当前是精简页。执行 <code>npm run build-web</code> 后刷新即可使用完整配置页面。</div>
-<div class="card"><div class="row">
-  <span id="status" class="status">连接中…</span>
-  <button id="restart">重新启动任务进程</button>
-</div></div>
-<div id="logs"></div>
-<script>
-let lastSeq = 0, session = '';
-const view = document.getElementById('logs');
-async function pollLogs() {
-  try {
-    const r = await fetch('/api/logs?after=' + lastSeq, { cache: 'no-store' });
-    if (!r.ok) return;
-    const data = await r.json();
-    if (data.session !== session) { session = data.session; view.innerHTML = ''; lastSeq = 0; }
-    for (const rec of data.records) {
-      const div = document.createElement('div');
-      div.className = rec.level;
-      div.textContent = '[' + new Date(rec.time).toLocaleTimeString('zh-CN', {hour12:false}) +
-        '] ' + (rec.title || '[Console]') + ' ' + rec.text;
-      view.appendChild(div);
-      lastSeq = Math.max(lastSeq, rec.seq);
-    }
-    while (view.childElementCount > 1000) view.removeChild(view.firstChild);
-    view.scrollTop = view.scrollHeight;
-  } catch (e) { /* 控制台重启期间保留序号 */ }
-  setTimeout(pollLogs, 1000);
-}
-async function pollStatus() {
-  try {
-    const data = await (await fetch('/api/status', { cache: 'no-store' })).json();
-    document.getElementById('status').textContent = data.running
-      ? '运行中 · PID ' + data.pid : '已停止 · 退出码 ' + data.exitCode;
-  } catch (e) { document.getElementById('status').textContent = '控制台不可用'; }
-  setTimeout(pollStatus, 2000);
-}
-document.getElementById('restart').onclick = async () => {
-  if (!confirm('停止当前任务进程并重新启动：重新读取配置与 cookie，全部任务重新运行。')) return;
-  const r = await fetch('/api/restart', { method: 'POST' });
-  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || ('HTTP ' + r.status)); }
-};
-pollLogs(); pollStatus();
-</script>
-</body>
-</html>
-"""
 
 
 def main() -> int:
