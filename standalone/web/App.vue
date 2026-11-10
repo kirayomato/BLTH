@@ -755,7 +755,7 @@ async function runLike(): Promise<void> {
       </div>
     </el-card>
 
-    <p class="footer">开关变更会立即写入配置；新启用的任务若今天尚未完成，会马上运行一次。配置由任务进程落盘，重启后会重新读取。</p>
+    <p class="footer">开关变更会立即写入配置；重新打开的任务会马上运行一次，今天已完成的任务只会重新排期，不会重复执行。配置由任务进程落盘，重启后会重新读取。</p>
   </div>
 </template>
 

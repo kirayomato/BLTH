@@ -190,6 +190,7 @@ function listTasks(): unknown[] {
  */
 function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
   const newlyEnabled: TaskEntry[] = []
+  const newlyDisabled: TaskEntry[] = []
 
   for (const update of updates) {
     const entry = TASK_ENTRIES.find((item) => entryId(item) === update.id)
@@ -207,10 +208,36 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
     target[field] = enabled
     if (enabled) {
       newlyEnabled.push(entry)
+    } else {
+      newlyDisabled.push(entry)
     }
   }
 
+  cancelScheduled(newlyDisabled)
   runNewlyEnabled(newlyEnabled)
+}
+
+/**
+ * 关闭主开关时撤掉已排的下次运行。
+ *
+ * 定时器回调直接调 `run()`，不看开关，留着的话关掉的任务到点仍会自行开跑。
+ * 子开关与主开关共用同一个实例，撤排期只由主开关发起，否则关掉「发弹幕」会连带
+ * 掐掉整个勋章任务的排期。
+ */
+function cancelScheduled(entries: TaskEntry[]): void {
+  for (const entry of entries) {
+    if (entry.field) {
+      continue
+    }
+
+    const instance = useModuleStore().moduleInstances[entry.moduleName]
+    if (!instance || instance.nextRunTimer === undefined) {
+      continue
+    }
+
+    clearTimeout(instance.nextRunTimer)
+    instance.nextRunTimer = undefined
+  }
 }
 
 /** 打开的任务立即跑一轮，避免等到下一次排期 */
@@ -224,8 +251,21 @@ function runNewlyEnabled(entries: TaskEntry[]): void {
     }
 
     const instance = moduleStore.moduleInstances[entry.moduleName]
-    if (!instance || !instance.isEnabled() || instance.nextRunTimer) {
+    if (!instance) {
+      // 默认模块出错时 startModules 不会实例化任务模块，这里只提示，不去补建一份
+      logger.warn(`【${entry.label}】已启用，但任务模块未实例化，重新启动任务后才会运行`)
       continue
+    }
+    if (!instance.isEnabled()) {
+      continue
+    }
+
+    // 重新打开开关视为「现在就跑一次」：任务跑完会给自己排到次日零点，不撤掉旧定时器的话
+    // 这里永远判定为已有排期，开关开了也不会有任何动静；撤掉后由本次运行重新排期，
+    // 否则旧定时器到点还会再跑一轮，两轮各自排期会越叠越多。
+    if (instance.nextRunTimer !== undefined) {
+      clearTimeout(instance.nextRunTimer)
+      instance.nextRunTimer = undefined
     }
 
     logger.log(`【${entry.label}】已启用，立即触发一次`)
