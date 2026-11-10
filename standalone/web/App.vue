@@ -338,37 +338,98 @@ async function saveConfigJson(): Promise<void> {
   }
 }
 
-/* ---------------- 重新加载 ---------------- */
+/* ---------------- 任务进程 ---------------- */
 
-const reloading = ref(false)
+interface ProcessStatus {
+  running: boolean
+  pid: number | null
+  startedAt: number | null
+  exitCode: number | null
+  control: boolean
+}
 
-async function reloadProgram(): Promise<void> {
+const restarting = ref(false)
+const processStatus = ref<ProcessStatus | null>(null)
+let statusTimer: number | undefined
+
+const statusText = computed(() => {
+  const status = processStatus.value
+  if (!status) {
+    return '正在连接控制台…'
+  }
+  if (!status.running) {
+    return `任务进程已停止（退出码 ${status.exitCode ?? '—'}）`
+  }
+
+  const since = status.startedAt
+    ? new Date(status.startedAt).toLocaleTimeString('zh-CN', { hour12: false })
+    : '—'
+  const control = status.control ? '' : ' · 控制通道未就绪'
+  return `任务进程运行中 · PID ${status.pid} · 启动于 ${since}${control}`
+})
+
+async function pollStatus(): Promise<void> {
+  try {
+    const response = await fetch('/api/status', { cache: 'no-store' })
+    if (response.ok) {
+      processStatus.value = (await response.json()) as ProcessStatus
+    }
+  } catch {
+    // 控制台自身重启期间保留上一次状态
+  } finally {
+    statusTimer = window.setTimeout(pollStatus, 2000)
+  }
+}
+
+/** 等新进程的控制通道就绪后重取页面数据：外部直接编辑 storage.json 的情况也要能反映出来 */
+async function refreshAfterRestart(): Promise<void> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await new Promise((resolve) => window.setTimeout(resolve, 800))
+
+    try {
+      const response = await fetch('/api/status', { cache: 'no-store' })
+      const status = (await response.json()) as ProcessStatus
+      if (!status.running || !status.control) {
+        continue
+      }
+
+      await Promise.all([load(), loadLogLevel(), loadConfigJson()])
+      return
+    } catch {
+      // 控制台短暂不可用，继续等下一轮
+    }
+  }
+}
+
+async function restartProgram(): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      '会重新读取 data/storage.json 与 cookie.txt 并重新运行全部任务。正在跑的任务会被关掉开关、在下一个检查点停止，随后按新配置重跑；进程不退出，日志保持连续。',
-      '重新加载',
-      { type: 'warning', confirmButtonText: '重新加载', cancelButtonText: '取消' },
+      '会停止当前任务进程并重新启动：重新读取 data/storage.json 与 cookie.txt，全部任务从头运行。在途请求立即中断；控制台不下线，运行日志保持连续。',
+      '重新启动任务',
+      { type: 'warning', confirmButtonText: '重新启动', cancelButtonText: '取消' },
     )
   } catch {
     return
   }
 
-  reloading.value = true
+  restarting.value = true
 
   try {
-    const response = await fetch('/api/reload', { method: 'POST' })
+    const response = await fetch('/api/restart', { method: 'POST' })
     if (!response.ok) {
       const data = (await response.json().catch(() => ({}))) as { error?: string }
       throw new Error(data.error ?? `HTTP ${response.status}`)
     }
 
-    ElMessage.success('已开始重新加载，页面将自动刷新')
-    // 默认模块要重新拉一遍数据，留出时间让日志先出现；刷新后仍可在日志里看进度
-    await new Promise((resolve) => window.setTimeout(resolve, 1200))
-    location.reload()
+    ElMessage.success('已开始重新启动，进度见下方运行日志')
+    void refreshAfterRestart()
   } catch (err) {
-    ElMessage.error(`重新加载失败：${(err as Error).message}`)
-    reloading.value = false
+    ElMessage.error(`重新启动失败：${(err as Error).message}`)
+  } finally {
+    // 重启在控制台侧异步进行，留出一段时间避免连点；状态由既有的轮询循环更新
+    window.setTimeout(() => {
+      restarting.value = false
+    }, 1500)
   }
 }
 
@@ -377,10 +438,12 @@ onMounted(() => {
   loadLogLevel()
   loadConfigJson()
   void pollLogs()
+  void pollStatus()
 })
 
 onUnmounted(() => {
   window.clearTimeout(logTimer)
+  window.clearTimeout(statusTimer)
 })
 
 /* ---------------- 手动点赞 ---------------- */
@@ -489,10 +552,13 @@ async function runLike(): Promise<void> {
     <header class="header">
       <div class="header-text">
         <h1>BLTH 配置</h1>
-        <p class="hint">此处可调整任务开关与少量开关型参数；其余任务参数（投币数量、观看时长、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改</p>
+        <p class="hint">此处可调整任务开关与少量开关型参数；其余任务参数（投币数量、观看时长、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；需要停止全部任务并按新配置从头重跑时，点右上角【重新启动任务】</p>
+        <p class="hint process-status" :class="{ stopped: processStatus && !processStatus.running }">
+          {{ statusText }}
+        </p>
       </div>
-      <el-button type="danger" plain :loading="reloading" @click="reloadProgram">
-        重新加载
+      <el-button type="danger" plain :loading="restarting" @click="restartProgram">
+        重新启动任务
       </el-button>
     </header>
 
@@ -557,7 +623,7 @@ async function runLike(): Promise<void> {
       </div>
 
       <p class="hint log-footer">
-        内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条；重新加载不会清空
+        内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条；重启任务进程不会清空
       </p>
     </el-card>
 
@@ -689,7 +755,7 @@ async function runLike(): Promise<void> {
       </div>
     </el-card>
 
-    <p class="footer">开关变更会立即写入配置；新启用的任务若今天尚未完成，会马上运行一次。</p>
+    <p class="footer">开关变更会立即写入配置；新启用的任务若今天尚未完成，会马上运行一次。配置由任务进程落盘，重启后会重新读取。</p>
   </div>
 </template>
 
@@ -729,6 +795,15 @@ async function runLike(): Promise<void> {
 
 .card {
   margin-top: 16px;
+}
+
+.process-status {
+  margin-top: 8px;
+  font-weight: 500;
+}
+
+.process-status.stopped {
+  color: var(--el-color-danger);
 }
 
 .group-name {

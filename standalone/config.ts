@@ -29,7 +29,7 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'none'
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error', 'none'] as const
 
-function isLogLevel(value: unknown): value is LogLevel {
+export function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value)
 }
 
@@ -37,11 +37,19 @@ function parseLogLevel(value: string | undefined): LogLevel {
   return isLogLevel(value) ? value : 'info'
 }
 
-/** 当前日志等级，由控制台在启动任务进程时通过 BLTH_LOG_LEVEL 传入 */
-const activeLogLevel: LogLevel = parseLogLevel(readEnv('BLTH_LOG_LEVEL'))
+/**
+ * 当前日志等级。环境变量是缺省值，控制台保存的等级会覆盖它并在启动时由入口应用。
+ *
+ * 等级在每次 console 调用时读取，因此运行期调整立即生效。
+ */
+let activeLogLevel: LogLevel = parseLogLevel(readEnv('BLTH_LOG_LEVEL'))
 
 export function getLogLevel(): LogLevel {
   return activeLogLevel
+}
+
+export function setLogLevel(value: LogLevel): void {
+  activeLogLevel = value
 }
 
 export const options: StandaloneOptions = {

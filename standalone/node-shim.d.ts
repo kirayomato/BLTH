@@ -29,4 +29,11 @@ declare const process: {
   version: string
   on(event: string, listener: (...args: any[]) => void): void
   once(event: string, listener: (...args: any[]) => void): void
+  stdin: {
+    setEncoding(encoding: string): void
+    on(event: string, listener: (chunk: string) => void): void
+  }
+  stdout: {
+    write(data: string): boolean
+  }
 }

@@ -9,7 +9,8 @@ import type BaseModule from '@/modules/BaseModule'
 import * as defaultModules from '@/modules/default'
 import * as dailyModules from '@/modules/dailyTasks'
 import { useBiliStore, useModuleStore } from '@/stores'
-import { options } from './config'
+import { isLogLevel, options, setLogLevel } from './config'
+import { startControlChannel } from './control'
 import { getCriticalError, loadModule, runModule, startModules, type ModulePlan } from './runner'
 import { storage } from './storage'
 
@@ -64,6 +65,12 @@ function seedStorage(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  // 控制台保存的日志等级优先于环境变量缺省值
+  const persisted: unknown = storage.get<string>('logLevel', '')
+  if (isLogLevel(persisted)) {
+    setLogLevel(persisted)
+  }
+
   logger.log(`数据目录：${options.dataDir}`)
   logger.log(`cookie 文件：${options.cookieFile}`)
 
@@ -72,6 +79,9 @@ async function bootstrap(): Promise<void> {
   // 触发 store 初始化：读取配置文件，并注册配置变更后的写盘逻辑
   useModuleStore()
   logger.log(`模块配置：${storage.path}`)
+
+  // 控制通道要在默认模块加载前就绪：那一阶段可能有较慢的接口请求，页面不应跟着卡住
+  startControlChannel()
 
   await startModules(modulePlan)
 
