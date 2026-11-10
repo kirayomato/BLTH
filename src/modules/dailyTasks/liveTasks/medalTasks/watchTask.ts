@@ -334,7 +334,7 @@ class WatchTask extends MedalModule {
 
       // 如果无法从 url 中提取到分区数据，调用 API 获取
       const response = await BAPI.live.getInfoByRoom(roomid)
-      this.logger.log(`BAPI.live.getInfoByRoom(${roomid}) response`, response)
+      this.logger.debug(`BAPI.live.getInfoByRoom(${roomid}) response`, response)
 
       if (response.code === 0) {
         const room_info = response.data.room_info
