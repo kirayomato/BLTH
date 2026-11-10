@@ -132,7 +132,9 @@ def fetch_avatar(url: str) -> tuple[bytes, str]:
         if not avatar_allowed(response.geturl()):
             raise ValueError("重定向到不受信任的地址")
 
-        content_type = (response.headers.get("Content-Type") or "").split(";")[0].strip()
+        content_type = (
+            (response.headers.get("Content-Type") or "").split(";")[0].strip()
+        )
         if not content_type.startswith("image/"):
             raise ValueError(f"返回的不是图片（{content_type or '无类型'}）")
 
@@ -167,7 +169,9 @@ def print_line(level: str, title: str, text: str) -> None:
                 stream.write(line + "\n")
             except UnicodeEncodeError:
                 codec = getattr(stream, "encoding", None) or "utf-8"
-                stream.write(line.encode(codec, "replace").decode(codec, "replace") + "\n")
+                stream.write(
+                    line.encode(codec, "replace").decode(codec, "replace") + "\n"
+                )
             stream.flush()
         except (OSError, ValueError):
             pass
@@ -190,16 +194,18 @@ class LogBuffer:
         match = LOGGER_PREFIX.match(line)
         if title is None:
             title = match.group(1) if match else ""
-        text = line[match.end():].strip() if match else line.strip()
+        text = line[match.end() :].strip() if match else line.strip()
 
         with self.lock:
-            self.records.append({
-                "seq": self.next_seq,
-                "time": int(time.time() * 1000),
-                "level": level,
-                "title": title,
-                "text": text,
-            })
+            self.records.append(
+                {
+                    "seq": self.next_seq,
+                    "time": int(time.time() * 1000),
+                    "level": level,
+                    "title": title,
+                    "text": text,
+                }
+            )
             self.next_seq += 1
 
         print_line(level, title, text)
@@ -259,7 +265,7 @@ class ControlChannel:
             return False
 
         try:
-            message = json.loads(line[len(CONTROL_PREFIX):])
+            message = json.loads(line[len(CONTROL_PREFIX) :])
             request_id = message["id"]
         except (ValueError, KeyError, TypeError):
             return True
@@ -272,7 +278,9 @@ class ControlChannel:
             slot[0].set()
         return True
 
-    def request(self, action: str, payload: dict, timeout: float = 30.0) -> tuple[int, object]:
+    def request(
+        self, action: str, payload: dict, timeout: float = 30.0
+    ) -> tuple[int, object]:
         with self.lock:
             stream = self.stdin
             if stream is None:
@@ -282,10 +290,13 @@ class ControlChannel:
             event = threading.Event()
             self.pending[request_id] = [event, None]
 
-        line = json.dumps(
-            {"id": request_id, "action": action, "payload": payload},
-            ensure_ascii=False,
-        ) + "\n"
+        line = (
+            json.dumps(
+                {"id": request_id, "action": action, "payload": payload},
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
 
         try:
             with self.write_lock:
@@ -372,7 +383,9 @@ class Supervisor:
                     **kwargs,
                 )
             except OSError as error:
-                self.logs.append("error", f"任务进程启动失败：{error}", title="[Console]")
+                self.logs.append(
+                    "error", f"任务进程启动失败：{error}", title="[Console]"
+                )
                 return False
 
             self.process = process
@@ -381,11 +394,18 @@ class Supervisor:
             self.control.attach(process)
             self.readers = [
                 threading.Thread(target=self._reader, args=(stream, level), daemon=True)
-                for stream, level in ((process.stdout, "info"), (process.stderr, "stderr"))
+                for stream, level in (
+                    (process.stdout, "info"),
+                    (process.stderr, "stderr"),
+                )
             ]
-            self.waiter = threading.Thread(target=self._waiter, args=(process,), daemon=True)
+            self.waiter = threading.Thread(
+                target=self._waiter, args=(process,), daemon=True
+            )
 
-        self.logs.append("info", f"任务进程已启动（PID {process.pid}）", title="[Console]")
+        self.logs.append(
+            "info", f"任务进程已启动（PID {process.pid}）", title="[Console]"
+        )
         for reader in self.readers:
             reader.start()
         self.waiter.start()
@@ -403,9 +423,11 @@ class Supervisor:
                 marked = LEVEL_MARK.match(line)
                 if marked:
                     level = marked.group(1)
-                    line = line[marked.end():]
+                    line = line[marked.end() :]
                 elif stream_level == "stderr":
-                    level = "error" if any(hint in line for hint in ERROR_HINTS) else "warn"
+                    level = (
+                        "error" if any(hint in line for hint in ERROR_HINTS) else "warn"
+                    )
                 self.logs.append(level, line)
         finally:
             stream.close()
@@ -490,7 +512,9 @@ class Handler(BaseHTTPRequestHandler):
         # 访问日志会混进终端输出，这里保持安静
         pass
 
-    def _send(self, status: int, body: bytes, content_type: str, cache_seconds: int = 0) -> None:
+    def _send(
+        self, status: int, body: bytes, content_type: str, cache_seconds: int = 0
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         if cache_seconds > 0:
@@ -548,7 +572,9 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(
                 500,
-                f"缺少 {FALLBACK_FILE}：先执行 npm run build-web，或恢复控制台的精简页".encode("utf-8"),
+                f"缺少 {FALLBACK_FILE}：先执行 npm run build-web，或恢复控制台的精简页".encode(
+                    "utf-8"
+                ),
                 "text/plain; charset=utf-8",
             )
 
@@ -628,7 +654,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="BLTH 独立运行版 Web 控制台")
-    parser.add_argument("--node", default=shutil.which("node") or "node", help="Node 可执行文件")
+    parser.add_argument(
+        "--node", default=shutil.which("node") or "node", help="Node 可执行文件"
+    )
     parser.add_argument(
         "--script",
         default=str(ROOT / "dist-standalone" / "blth-standalone.mjs"),
@@ -649,12 +677,18 @@ def main() -> int:
 
     script = Path(args.script).resolve()
     if not script.is_file():
-        print(f"找不到任务进程产物：{script}\n请先执行 npm run build-standalone", file=sys.stderr)
+        print(
+            f"找不到任务进程产物：{script}\n请先执行 npm run build-standalone",
+            file=sys.stderr,
+        )
         return 1
 
     web_page = Path(args.web).resolve()
     if not web_page.is_file():
-        print(f"找不到配置页面产物：{web_page}\n请先执行 npm run build-web（当前使用精简页）", file=sys.stderr)
+        print(
+            f"找不到配置页面产物：{web_page}\n请先执行 npm run build-web（当前使用精简页）",
+            file=sys.stderr,
+        )
 
     logs = LogBuffer()
     control = ControlChannel()
@@ -665,9 +699,9 @@ def main() -> int:
     Handler.web_page = web_page
     supervisor.start()
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     server.daemon_threads = True
-    print(f"控制台：http://127.0.0.1:{args.port}", flush=True)
+    print(f"控制台：http://0.0.0.0:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
