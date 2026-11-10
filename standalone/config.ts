@@ -9,12 +9,6 @@ export interface StandaloneOptions {
   userAgent: string
   /** 失效看门狗的扫描间隔（毫秒） */
   watchdogInterval: number
-  /** 配置页面监听的端口 */
-  configPort: number
-  /** 是否启用配置页面 */
-  configEnabled: boolean
-  /** 日志等级，控制控制台输出的最低严重度 */
-  logLevel: LogLevel
 }
 
 /**
@@ -35,7 +29,7 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'none'
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error', 'none'] as const
 
-export function isLogLevel(value: unknown): value is LogLevel {
+function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value)
 }
 
@@ -43,20 +37,11 @@ function parseLogLevel(value: string | undefined): LogLevel {
   return isLogLevel(value) ? value : 'info'
 }
 
-/**
- * 运行时可变的当前日志等级。
- *
- * 配置页面能即时调整，因此用单独的变量而非固定在 options 上；初始值来自
- * 环境变量 BLTH_LOG_LEVEL，缺省为 info。
- */
-let activeLogLevel: LogLevel = parseLogLevel(readEnv('BLTH_LOG_LEVEL'))
+/** 当前日志等级，由控制台在启动任务进程时通过 BLTH_LOG_LEVEL 传入 */
+const activeLogLevel: LogLevel = parseLogLevel(readEnv('BLTH_LOG_LEVEL'))
 
 export function getLogLevel(): LogLevel {
   return activeLogLevel
-}
-
-export function setLogLevel(level: LogLevel): void {
-  activeLogLevel = level
 }
 
 export const options: StandaloneOptions = {
@@ -64,7 +49,4 @@ export const options: StandaloneOptions = {
   cookieFile: resolve(readEnv('BLTH_COOKIE_FILE') ?? 'cookie.txt'),
   userAgent: readEnv('BLTH_UA') ?? DEFAULT_USER_AGENT,
   watchdogInterval: Number(readEnv('BLTH_WATCHDOG_INTERVAL') ?? 300_000),
-  configPort: Number(readEnv('BLTH_CONFIG_PORT') ?? 8787),
-  configEnabled: readEnv('BLTH_NO_CONFIG_PAGE') !== '1',
-  logLevel: parseLogLevel(readEnv('BLTH_LOG_LEVEL')),
 }

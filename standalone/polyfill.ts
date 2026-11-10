@@ -1,6 +1,5 @@
 import { options, getLogLevel } from './config'
 import { loadCookies } from './cookie'
-import { appendConsoleLog } from './logs'
 
 /**
  * 运行环境适配层。
@@ -91,7 +90,7 @@ function installCookieStore(): void {
 
   Object.defineProperty(globalThis, 'cookieStore', {
     value: {
-      // 每次取用都走 loadCookies：它自己带缓存，重载配置时清掉缓存即可读到新 cookie
+      // 每次取用都走 loadCookies：它自己带缓存，进程重启后自然读到新 cookie
       async getAll() {
         return Object.entries(loadCookies()).map(([name, value]) => entry(name, value))
       },
@@ -112,8 +111,7 @@ function installCookieStore(): void {
 /**
  * Node 的 console 不支持 %c，共享代码的日志前缀会把整段样式声明原样打出来，这里过滤掉。
  *
- * 顺便把通过等级过滤的输出留一份给日志缓冲：等级决定「记录什么」，页面与日志文件看到的
- * 内容因此与终端一致。
+ * 同时按等级屏蔽输出：等级决定终端留下什么，控制台进程捕获到的就是这份输出。
  */
 function installConsoleFilter(): void {
   // 等级数值越小越详细；none 为最高，会屏蔽一切输出
@@ -130,9 +128,7 @@ function installConsoleFilter(): void {
         return
       }
 
-      const formatted = formatConsoleArgs(args)
-      appendConsoleLog(method === 'log' ? 'info' : method, formatted)
-      original(...formatted)
+      original(...formatConsoleArgs(args))
     }
   }
 }

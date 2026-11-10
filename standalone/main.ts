@@ -10,8 +10,7 @@ import * as defaultModules from '@/modules/default'
 import * as dailyModules from '@/modules/dailyTasks'
 import { useBiliStore, useModuleStore } from '@/stores'
 import { options } from './config'
-import { getCriticalError, loadModule, registerReloadPlan, runModule, startModules } from './runner'
-import { startConfigServer } from './server'
+import { getCriticalError, loadModule, runModule, startModules, type ModulePlan } from './runner'
 import { storage } from './storage'
 
 const logger = new Logger('Standalone')
@@ -43,6 +42,12 @@ const moduleMap = {
   ...dailyModules,
 } as Record<string, typeof BaseModule>
 
+const modulePlan: ModulePlan = {
+  moduleMap,
+  defaultNames: DEFAULT_MODULE_NAMES,
+  taskNames: TASK_MODULE_NAMES,
+}
+
 /**
  * 首次运行时写出配置模板，让可配置项一目了然。
  */
@@ -51,7 +56,7 @@ function seedStorage(): void {
     return
   }
 
-  // 独立运行版没有控制面板与页面增强功能，只写出任务相关的配置
+  // 独立运行版只跑每日任务，不写出页面增强相关的配置
   storage.set('modules', { DailyTasks: defaultValues.modules.DailyTasks })
 
   logger.log(`已生成配置文件：${storage.path}`)
@@ -64,21 +69,11 @@ async function bootstrap(): Promise<void> {
 
   seedStorage()
 
-  // 配置服务尽早启动：默认模块的数据请求可能耗时较久，不该拖慢页面的可用时间
-  startConfigServer()
-
   // 触发 store 初始化：读取配置文件，并注册配置变更后的写盘逻辑
   useModuleStore()
   logger.log(`模块配置：${storage.path}`)
 
-  // 模块清单由入口持有，重载时调度层按这份清单重新实例化
-  registerReloadPlan({
-    moduleMap,
-    defaultNames: DEFAULT_MODULE_NAMES,
-    taskNames: TASK_MODULE_NAMES,
-  })
-
-  await startModules()
+  await startModules(modulePlan)
 
   logger.log('启动完成，进程将常驻运行，按 Ctrl+C 退出')
 }
@@ -115,8 +110,13 @@ async function probe(): Promise<void> {
 
 process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
+// Windows 下控制台发来 Ctrl+Break 时走同一套退出流程
+process.on('SIGBREAK', () => shutdown('SIGBREAK'))
 
 setActivePinia(createPinia())
+
+// 没有内嵌服务器后需要一个常驻 handle：任务全部关闭时不会有任何排期定时器
+setInterval(() => undefined, 60_000)
 
 const entry = process.env.BLTH_PROBE === '1' ? probe : bootstrap
 

@@ -20,6 +20,7 @@ npm run preview            # 打开提供编译产物安装链接的本地预览
 # 独立运行版
 
 `standalone/` 是不依赖浏览器的版本，只包含每日任务，产物为 `dist-standalone/blth-standalone.mjs`。
+`console/console.py` 是它的 Web 控制台，用 Python 标准库实现，作为常驻 supervisor 拉起任务进程。
 
 它复用 `src/` 下的同一套代码：构建时把 `$` 别名指向 `standalone/node-gm.ts`，并在入口最先执行
 `standalone/polyfill.ts` 补齐 `window` / `document` / `navigator` / `cookieStore`。
@@ -31,40 +32,40 @@ npm run preview            # 打开提供编译产物安装链接的本地预览
 - `data/storage.json`：首次运行自动生成
 
 ```sh
-node dist-standalone/blth-standalone.mjs                # 常驻运行
-BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs   # 仅检查登录态，发一次请求后退出
+python console/console.py                              # 启动控制台并拉起任务进程
+node dist-standalone/blth-standalone.mjs               # 只跑任务进程，不带配置页面
+BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs  # 仅检查登录态，发一次请求后退出
 ```
 
-启动后访问 `http://127.0.0.1:8787` 打开配置页面，可以开关各项任务，调整日志等级
-（debug / info / warn / error / 关闭），查看运行日志，编辑配置 JSON，以及重新加载配置；改动即时生效并落盘。
-页面只监听回环地址。日志等级同时决定终端输出与页面日志的记录范围（关闭即不记录）。
-点赞任务改为手动运行：模块运行（含打开点赞开关、手动重跑）时会先查好可点赞的直播间，
-页面点【获取可点赞直播间】/【选择直播间点赞】直接展示这份结果，不再现查；
-点赞执行完成或跨天后清空，执行时仍按原来的逻辑逐个房间、逐轮重新确认。
+控制台只监听回环地址（`http://127.0.0.1:8787`），当前提供运行状态、运行日志与
+【重新启动任务进程】按钮；任务开关、配置 JSON、日志等级与点赞入口由控制台后续接入，
+这些改动暂时直接编辑 `data/storage.json`，再点重启生效。任务进程本身不再监听端口。
 
-运行日志：只存在进程内存，保留最近 1000 条供页面按 `seq` 增量拉取，不写文件。页面上的【重新加载】不清空日志；
-只有真正结束进程再启动时内存日志才从头开始，页面靠会话标识识别换进程，序号从头也不影响增量。
+重新启动（`POST /api/restart`）：先停掉旧任务进程（在途请求一并中断），等它走完 600 ms 的
+落盘宽限后拉起新进程。新进程重读 `data/storage.json` 与 `cookie.txt`，全部任务从头运行。
+因为是一次进程替换，不需要软停开关、等检查点、恢复配置这类进程内交接；控制台始终在线，
+页面不会断连。今天已完成的任务仍由模块自己的完成标记挡住，不会重复扣币或兑换。
+连点会返回 409，不会叠加出多份进程。
 
-配置 JSON：编辑的是 `data/storage.json` 里的 `modules` 子树，保存时就地改写
-`moduleConfig`（保留各模块持有的节点引用）再经 store 的防抖 watch 落盘；缺 `DailyTasks`
-或任一任务节点的文本会被拒绝，避免误删把任务配置清空。`cache`/`ui`/`logLevel` 不在编辑范围内。
+Windows 下控制台用 Ctrl+Break 通知任务进程退出，POSIX 下用 SIGTERM；两者都走
+`main.ts` 的 shutdown 留出落盘时间，超时 3 秒后强制结束。`storage.json` 采用临时文件改名写入，
+强杀也不会留下半截文件。
 
-重新加载（`POST /api/reload`）：进程内重读 `data/storage.json` 与 `cookie.txt`，就地覆盖
-`moduleConfig` 后按启动流程重新实例化、重新调度。PID、终端归属、日志缓冲与配置页面连接都不变，
-在 screen 里运行也不会把进程跑丢。
+运行日志：任务进程的 stdout / stderr 由控制台按行捕获，只存在控制台进程内存，保留最近 1000 条，
+不写文件。`seq` 全局递增，重启任务进程不清空、不换会话标识，页面增量拉取到的日志保持连续；
+只有控制台自身重启才会换会话标识，页面据此清空重取。日志等级由 `BLTH_LOG_LEVEL` 决定，
+它同时控制终端输出与页面能记录到的内容。warn / error 走 stderr，控制台按文本区分两者。
 
-在途任务不能从外部中断，重载时用 `toRaw` 临时把它们的 `enabled` / `likeEnabled` /
-`danmuEnabled` 置为 false（不走响应式赋值，避免 store 的 deep watch 把 false 落盘），让循环在
-下一个检查点自行退出；这些任务本轮不重启，退出后由 `runModule` 的代次收尾恢复开关、补一个新
-实例立即按新配置重新评估。今天已完成的任务会被模块自己的完成标记挡掉，不会重复扣币或兑换。
+配置 JSON：`data/storage.json` 里的 `modules` 子树由任务进程的 store 防抖 watch 落盘；
+控制台改配置时必须先停任务进程再写，避免两边并发覆盖。`cache`/`ui`/`logLevel` 不在编辑范围内。
 
 构建分两步：`vite.web.config.ts` 先构建 `standalone/web` 得到内联了全部脚本与样式的单个 HTML
-（`dist-web/`），`vite.standalone.config.ts` 再把该 HTML 嵌进可执行文件。两者由
-`build-standalone` 按序串联。
+（`dist-web/`），`vite.standalone.config.ts` 再产出 Node 可执行文件。两者由
+`build-standalone` 按序串联；Node 产物不再内嵌该 HTML，它由控制台直接提供。
 
 可用环境变量：`BLTH_COOKIE_FILE`、`BLTH_DATA_DIR`、`BLTH_UA`、`BLTH_WATCHDOG_INTERVAL`、
-`BLTH_CONFIG_PORT`、`BLTH_NO_CONFIG_PAGE`、`BLTH_LOG_LEVEL`（日志等级默认值，配置页面的选择
-会覆盖它并持久化到 `data/storage.json`，重启后仍以页面保存的值为准）。
+`BLTH_LOG_LEVEL`（均由控制台透传给任务进程）；`BLTH_CONFIG_PORT` 由控制台自己使用。
+控制台另支持 `--node`、`--script`、`--port` 参数。
 
 两版共用任务逻辑，但完成状态各自独立存储，**不要同时运行**，否则任务会被重复执行。
 
@@ -105,5 +106,5 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs   # 仅检查登录态，�
 - 调试早期模块（`runAt = 'document-start'`）时 dev 模式注入太晚，请用 `npm run build` 的产物测试
 - `src/modules/dailyTasks/` 下的模块被用户脚本与独立运行版共用，不要依赖真实 DOM 结构或页面上才有的对象（如 `window.BilibiliLive`、`window.livePlayer`），否则独立运行版无法运行
 - 独立运行版需要 Node API 时，不要给 `tsconfig.standalone.json` 加 `@types/node`：它的全局声明会把 `setTimeout` 的返回类型换成 `NodeJS.Timeout`，与 `BaseModule.nextRunTimer` 的 `number` 冲突；改在 `standalone/node-shim.d.ts` 里按需声明
-- `dist-web` 必须先于独立运行版存在（`build-standalone` 已按序串联），单独执行 `build-standalone-node` 会因缺少 `dist-web/index.html` 而失败
+- `dist-web/index.html` 由 `build-web` 产出，供配置页面使用；Node 产物不再引用它，单独执行 `build-standalone-node` 不需要它
 - 向 HTML 内联压缩后的 JS 时，`String.replace` 的替换值必须用函数形式：字符串替换值中的 `$&`、`` $` ``、`$'` 会被二次展开，而压缩代码里几乎必然含这些序列，会把 script 标签撑破（`scripts/inlineHtml.js` 曾因此产出多个 `</script>`，页面整页乱码）

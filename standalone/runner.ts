@@ -3,17 +3,18 @@ import type BaseModule from '@/modules/BaseModule'
 import { delayToNextMoment } from '@/library/luxon'
 import Logger from '@/library/logger'
 import ModuleCriticalError from '@/library/error/ModuleCriticalError'
-import Storage from '@/library/storage'
 import { useModuleStore } from '@/stores'
-import { isLogLevel, options, setLogLevel, type LogLevel } from './config'
-import { overwriteConfig } from './config-merge'
-import { resetCookieCache } from './cookie'
-import { storage } from './storage'
+import { options } from './config'
 
 const logger = new Logger('Standalone')
 
-/** 正在执行的模块及其所属代次，避免看门狗与进行中的任务重叠触发 */
-const running = new Map<string, number>()
+/**
+ * 正在执行的模块与它当前占用的实例。
+ *
+ * 按实例身份记「当前占用者」：同一实例不允许重入，
+ * 同名的新实例是另一个对象，不受旧实例占用影响。
+ */
+const running = new Map<string, BaseModule>()
 
 /**
  * 纳入自动调度的任务模块
@@ -25,42 +26,16 @@ const taskModuleNames = new Set<string>()
 
 let criticalError: Error | undefined
 
-/** 调度代次：重载后自增，上一轮的实例收尾时不再改动新一轮的调度状态 */
-let generation = 0
-
 let watchdogTimer: ReturnType<typeof setInterval> | undefined
 
-/** 重载所需的模块清单，由入口在启动时登记 */
-export interface ReloadPlan {
+/** 启动所需的模块清单，由入口传入 */
+export interface ModulePlan {
   /** 模块名到模块类的映射 */
   moduleMap: Record<string, typeof BaseModule>
   /** 默认模块，数组顺序即依赖顺序 */
   defaultNames: string[]
   /** 任务模块 */
   taskNames: string[]
-}
-
-let reloadPlan: ReloadPlan | undefined
-
-/**
- * 在途任务的开关恢复函数，按模块名索引。
- *
- * 重载时临时关掉在途任务的开关让它们尽快退出，退出后再恢复；期间不能让这些 false 落盘。
- */
-const shutSwitches = new Map<string, () => void>()
-
-/** 登记重载方案。模块清单由入口持有，调度层不应重复维护一份。 */
-export function registerReloadPlan(plan: ReloadPlan): void {
-  reloadPlan = plan
-}
-
-/**
- * 登记需要兜底调度与看门狗保护的任务模块。需在任务模块首次运行之前调用。
- */
-export function registerTaskModules(names: string[]): void {
-  for (const name of names) {
-    taskModuleNames.add(name)
-  }
 }
 
 /**
@@ -83,109 +58,38 @@ export function loadModule(module: typeof BaseModule, name: string): BaseModule 
  * 运行模块。失败只记录日志，不向外抛出，以免中断其余模块的调度。
  */
 export async function runModule(name: string, instance: BaseModule): Promise<void> {
-  const startGeneration = generation
+  // moduleInstances 取出来的是响应式代理，统一按原始对象记账与比对
+  const target = toRaw(instance)
 
-  // 同一代次内不允许重入；重载后的新一代可以重新跑，旧的一轮无法中断
-  if (running.get(name) === startGeneration) {
+  if (running.get(name) === target) {
     return
   }
 
-  running.set(name, startGeneration)
+  running.set(name, target)
 
   try {
-    await instance.run()
+    await target.run()
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error))
     logger.error(`模块 ${name} 运行出错：${failure.message}`)
 
-    if (error instanceof ModuleCriticalError && startGeneration === generation) {
+    if (error instanceof ModuleCriticalError && isCurrent(name, target)) {
       criticalError = failure
     }
   } finally {
-    if (running.get(name) === startGeneration) {
+    if (running.get(name) === target) {
       running.delete(name)
     }
 
-    if (startGeneration === generation) {
-      scheduleFallback(name, instance)
-    } else {
-      retireInstance(name, instance)
+    if (isCurrent(name, target)) {
+      scheduleFallback(name, target)
     }
   }
 }
 
-/**
- * 临时关掉在途任务的开关，让它在这个检查点退出。
- *
- * 只改响应式对象的原始值：走 proxy 赋值会触发 store 的 deep watch（`leading: true`），
- * 把 `false` 立刻写进 storage.json。各模块读 `this.config.enabled` 时经由同一个 proxy，
- * 仍能拿到这里的改动。
- */
-function shutDownInstance(name: string, instance: BaseModule): void {
-  const config = (instance as any).config
-  if (!config || typeof config !== 'object') {
-    return
-  }
-
-  // 上一轮重载可能还没等到这个实例退出，先恢复旧值再记录本次的真值
-  shutSwitches.get(name)?.()
-
-  const raw = toRaw(config) as Record<string, any>
-  const saved: Record<string, unknown> = {}
-
-  // 点亮勋章任务不检查 enabled，点赞/弹幕循环只看各自的子开关
-  for (const key of ['enabled', 'likeEnabled', 'danmuEnabled']) {
-    if (key in raw) {
-      saved[key] = raw[key]
-      raw[key] = false
-    }
-  }
-
-  if (Object.keys(saved).length === 0) {
-    return
-  }
-
-  const restore = () => {
-    for (const [key, value] of Object.entries(saved)) {
-      raw[key] = value
-    }
-    shutSwitches.delete(name)
-    // toRaw 改动不触发 watch，主动落一次盘，避免重载期间其它配置变更把 false 带进文件
-    Storage.setModuleConfig(useModuleStore().moduleConfig)
-  }
-
-  shutSwitches.set(name, restore)
-}
-
-/**
- * 重载后旧实例的收尾。
- *
- * 旧实例是重载那一刻正在跑的，开关被临时关掉、已在检查点退出：恢复开关后补一个新实例
- * 立即重新评估。今天已经完成的任务会被模块自己的完成标记挡掉，不会重复扣币或重复兑换。
- */
-function retireInstance(name: string, instance: BaseModule): void {
-  clearTimeout(instance.nextRunTimer)
-  instance.nextRunTimer = undefined
-  // 定时器回调是 `() => this.run()`，换掉 run 旧实例就不会再被唤醒
-  instance.run = async () => {}
-
-  shutSwitches.get(name)?.()
-
-  const module = reloadPlan?.moduleMap[name]
-  if (!module || !taskModuleNames.has(name)) {
-    return
-  }
-
-  const fresh = new module(name)
-  useModuleStore().moduleInstances[name] = fresh
-
-  if (getCriticalError()) {
-    // 默认模块未取到基础数据时不重跑任务，但仍要留排期，否则模块会永久退出调度
-    scheduleFallback(name, fresh)
-  } else if (fresh.isEnabled()) {
-    logger.log(`模块 ${name} 已退出，按新配置重新运行`)
-    void runModule(name, fresh)
-  }
+/** 该实例是否仍是 store 里登记的那一个 */
+function isCurrent(name: string, instance: BaseModule): boolean {
+  return toRaw(useModuleStore().moduleInstances[name]) === instance
 }
 
 /**
@@ -224,10 +128,8 @@ export function getCriticalError(): Error | undefined {
  * 已由 scheduleFallback 接走，不会落到这里。
  */
 export function startWatchdog(): void {
-  // 重复调用（重试、重载）时先撤掉旧的，避免多个看门狗同时触发同一模块
-  if (watchdogTimer !== undefined) {
-    clearInterval(watchdogTimer)
-  }
+  // 重复调用时先撤掉旧的，避免多个看门狗同时触发同一模块
+  stopWatchdog()
 
   watchdogTimer = setInterval(() => {
     const moduleStore = useModuleStore()
@@ -247,17 +149,7 @@ export function startWatchdog(): void {
   ;(watchdogTimer as any).unref?.()
 }
 
-/**
- * 清掉上一轮的调度状态。
- *
- * 先换代次再清标记：旧实例可能仍在运行，它们的收尾不会影响新一轮。
- */
-function resetRunner(): void {
-  generation += 1
-  criticalError = undefined
-
-  // running 不在这里清空：它记录的是「确实还有一轮在跑」，与代次无关，
-  // 清掉会让看门狗把同一个模块再拉起一次
+function stopWatchdog(): void {
   if (watchdogTimer !== undefined) {
     clearInterval(watchdogTimer)
     watchdogTimer = undefined
@@ -266,16 +158,11 @@ function resetRunner(): void {
 
 /**
  * 按启动流程跑一遍模块：默认模块串行完成后，任务模块并行启动。
- *
- * @param skip 本轮不启动的模块名（重载时正在运行的模块，避免同一任务并发执行）
  */
-export async function startModules(skip: ReadonlySet<string> = new Set()): Promise<void> {
-  const plan = reloadPlan
-  if (!plan) {
-    throw new Error('未登记模块清单')
+export async function startModules(plan: ModulePlan): Promise<void> {
+  for (const name of plan.taskNames) {
+    taskModuleNames.add(name)
   }
-
-  registerTaskModules(plan.taskNames)
 
   try {
     for (const name of plan.defaultNames) {
@@ -295,15 +182,10 @@ export async function startModules(skip: ReadonlySet<string> = new Set()): Promi
     const started: string[] = []
 
     if (failure) {
-      // 不直接退出：cookie 失效一类的问题下，配置页面恰好是排查所需的入口
+      // 不直接退出：cookie 失效一类的问题下，控制台里的运行日志是排查所需的入口
       logger.warn(`默认模块发生致命错误，本次不启动任务：${failure.message}`)
     } else {
       for (const name of plan.taskNames) {
-        if (skip.has(name)) {
-          logger.log(`模块 ${name} 开关已临时关闭，等这一轮退出后按新配置重新运行`)
-          continue
-        }
-
         const module = plan.moduleMap[name]
         if (!module) {
           logger.error(`未找到任务模块 ${name}`)
@@ -327,61 +209,4 @@ export async function startModules(skip: ReadonlySet<string> = new Set()): Promi
     // 中途出错也必须留下看门狗，否则常驻进程会失去唯一的兜底调度
     startWatchdog()
   }
-}
-
-/**
- * 进程内重载：重读配置与 cookie，停掉现有排期后按启动流程重新运行。
- *
- * 不换进程，PID、终端归属、日志缓冲与配置页面连接都保持不变。在途任务无法从外部中断，
- * 只能临时关掉它们的开关，让循环在下一个检查点自行退出，退出后再按新配置重新评估。
- */
-export async function reloadModules(): Promise<void> {
-  const moduleStore = useModuleStore()
-
-  const inFlight = new Set(running.keys())
-
-  for (const [name, instance] of Object.entries(moduleStore.moduleInstances)) {
-    if (inFlight.has(name)) {
-      continue
-    }
-
-    clearTimeout(instance.nextRunTimer)
-    instance.nextRunTimer = undefined
-    // 定时器回调是 `() => this.run()`，换掉 run 旧实例就不会再被唤醒
-    instance.run = async () => {}
-  }
-
-  resetRunner()
-
-  // 配置文件与 cookie 都可能被外部改过
-  storage.reload()
-  resetCookieCache()
-
-  // 就地覆盖，模块与 store 持有的引用继续有效
-  overwriteConfig(moduleStore.moduleConfig, Storage.getModuleConfig())
-
-  const logLevel = storage.get<LogLevel>('logLevel', options.logLevel)
-  if (isLogLevel(logLevel)) {
-    setLogLevel(logLevel)
-  }
-
-  // 覆盖之后才关开关，否则会被磁盘里的原值重新打开
-  let shutCount = 0
-  for (const [name, instance] of Object.entries(moduleStore.moduleInstances)) {
-    if (!inFlight.has(name) || !running.has(name)) {
-      continue
-    }
-
-    shutDownInstance(name, instance)
-    if (shutSwitches.has(name)) {
-      shutCount += 1
-    }
-  }
-
-  if (shutCount > 0) {
-    logger.log(`已临时关闭 ${shutCount} 项在途任务的开关，等它们退出后按新配置重新运行`)
-  }
-
-  logger.log('已重新读取配置，开始重新调度')
-  await startModules(inFlight)
 }

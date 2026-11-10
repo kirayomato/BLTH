@@ -345,7 +345,7 @@ const reloading = ref(false)
 async function reloadProgram(): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      '会重新读取 data/storage.json 与 cookie.txt 并重新运行任务。正在跑的任务会被临时关闭，退出后按新配置重跑；进程不退出，日志保持连续。',
+      '会重新读取 data/storage.json 与 cookie.txt 并重新运行全部任务。正在跑的任务会被关掉开关、在下一个检查点停止，随后按新配置重跑；进程不退出，日志保持连续。',
       '重新加载',
       { type: 'warning', confirmButtonText: '重新加载', cancelButtonText: '取消' },
     )
@@ -358,7 +358,8 @@ async function reloadProgram(): Promise<void> {
   try {
     const response = await fetch('/api/reload', { method: 'POST' })
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error ?? `HTTP ${response.status}`)
     }
 
     ElMessage.success('已开始重新加载，页面将自动刷新')

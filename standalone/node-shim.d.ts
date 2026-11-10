@@ -20,30 +20,6 @@ declare module 'node:path' {
   export function dirname(path: string): string
 }
 
-declare module 'node:http' {
-  export interface IncomingMessage {
-    method?: string
-    url?: string
-    setEncoding(encoding: string): void
-    on(event: string, listener: (...args: any[]) => void): void
-  }
-
-  export interface ServerResponse {
-    writeHead(statusCode: number, headers?: Record<string, string>): void
-    end(data?: string): void
-  }
-
-  export interface Server {
-    listen(port: number, hostname: string, callback?: () => void): void
-    close(callback?: () => void): void
-    on(event: string, listener: (...args: any[]) => void): void
-  }
-
-  export function createServer(
-    handler: (request: IncomingMessage, response: ServerResponse) => void,
-  ): Server
-}
-
 declare const process: {
   env: Record<string, string | undefined>
   argv: string[]
