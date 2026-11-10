@@ -5,7 +5,7 @@ import { useModuleStore } from '@/stores'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import { getLogLevel, isLogLevel, options, setLogLevel, type LogLevel } from './config'
 import { isPlainObject, overwriteConfig } from './config-merge'
-import { getLogRecords, logFilePath, logSession } from './logs'
+import { getLogRecords, logSession } from './logs'
 import { reloadModules, runModule } from './runner'
 import { configPageHtml } from './web-page'
 import { storage } from './storage'
@@ -239,6 +239,33 @@ function readModuleConfigJson(): string {
   return JSON.stringify(useModuleStore().moduleConfig, null, 2)
 }
 
+/** 取配置中某个层级的节点；路径上任意一段缺失或不是普通对象都返回 undefined */
+function pickConfigPath(node: unknown, path: string[]): unknown {
+  let current: unknown = node
+
+  for (const key of path) {
+    if (!isPlainObject(current)) {
+      return undefined
+    }
+    current = current[key]
+  }
+
+  return current
+}
+
+/** 提交的配置里缺失的任务节点。整份改写时少一个就等于把对应任务的配置删空 */
+function missingTaskPaths(config: Record<string, any>): string[] {
+  const missing = new Set<string>()
+
+  for (const entry of TASK_ENTRIES) {
+    if (!isPlainObject(pickConfigPath(config, entry.path))) {
+      missing.add(entry.path.join('.'))
+    }
+  }
+
+  return [...missing]
+}
+
 /** 应用页面提交的配置 JSON，返回规范化后的文本供页面回显 */
 function applyModuleConfigJson(text: string): string {
   let parsed: unknown
@@ -255,6 +282,15 @@ function applyModuleConfigJson(text: string): string {
   // 缺了 DailyTasks 的文本几乎一定是误删，放进去等于清空全部任务配置
   if (!isPlainObject(parsed.DailyTasks)) {
     throw new Error('缺少 DailyTasks，保存会清空所有任务配置，已拒绝')
+  }
+
+  // 顶层之下再缺任务节点，效果同样是把配置删空，模块随后会读到 undefined
+  const missing = missingTaskPaths(parsed)
+  if (missing.length > 0) {
+    throw new Error(
+      `缺少任务节点 ${missing.join('、')}，保存会清空这些任务的配置，已拒绝；` +
+        '不需要某个任务时请把它的 enabled 设为 false，不要删掉节点',
+    )
   }
 
   const before = enabledTaskIds()
@@ -450,7 +486,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 
   if (url === '/api/config') {
     if (request.method === 'GET') {
-      sendJson(response, 200, { logLevel: getLogLevel(), logFile: logFilePath })
+      sendJson(response, 200, { logLevel: getLogLevel() })
       return
     }
 

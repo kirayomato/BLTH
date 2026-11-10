@@ -100,11 +100,8 @@ async function loadLogLevel(): Promise<void> {
     if (!response.ok) {
       return
     }
-    const data = (await response.json()) as { logLevel: string; logFile?: string }
+    const data = (await response.json()) as { logLevel: string }
     logLevel.value = data.logLevel
-    if (data.logFile) {
-      logFilePath.value = data.logFile
-    }
   } catch {
     // 忽略，使用默认值
   }
@@ -157,7 +154,6 @@ const logModule = ref<string>()
 const logKeyword = ref('')
 const logAutoScroll = ref(true)
 const logPaused = ref(false)
-const logFilePath = ref('data/blth.log')
 const logViewRef = ref<HTMLElement>()
 
 /** 已拉取到的最新序号；进程重启后由会话标识变化触发重取 */
@@ -505,7 +501,7 @@ async function runLike(): Promise<void> {
       <template #header>
         <div class="card-header">
           <span class="group-name">日志</span>
-          <span class="hint">等级同时决定终端输出与 {{ logFilePath }} 的写入</span>
+          <span class="hint">等级同时决定终端输出与下方日志的记录范围（关闭即不记录）</span>
         </div>
       </template>
 

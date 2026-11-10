@@ -1,7 +1,3 @@
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
-import { options } from './config'
-
 /** 可记录的日志等级；none 不产生任何记录，故不在此列 */
 export type ConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -19,9 +15,6 @@ export interface LogRecord {
 /** 页面可拉取的记录上限，超出后丢弃最旧的 */
 const MAX_RECORDS = 1000
 
-/** 日志文件上限，超过后轮转出一份 .1 备份 */
-const MAX_FILE_BYTES = 5 * 1024 * 1024
-
 /**
  * 进程标识。
  *
@@ -30,31 +23,14 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024
  */
 export const logSession = Math.random().toString(36).slice(2, 10)
 
-export const logFilePath = join(options.dataDir, 'blth.log')
-
 const records: LogRecord[] = []
 
 let nextSeq = 1
-let fileBytes = 0
-let fileWritable = true
-
-try {
-  // 首次运行时数据目录还不存在，文件日志得先把它建出来
-  mkdirSync(options.dataDir, { recursive: true })
-  if (existsSync(logFilePath)) {
-    fileBytes = statSync(logFilePath).size
-  }
-} catch {
-  // 目录或文件不可用时只保留内存日志
-  fileWritable = false
-}
-
-const encoder = new TextEncoder()
 
 /**
  * 记录一条控制台输出。
  *
- * 调用方已按当前等级过滤，因此这里不再判断等级：页面、文件与终端看到的内容一致。
+ * 调用方已按当前等级过滤，因此这里不再判断等级：页面与终端看到的内容一致。
  */
 export function appendConsoleLog(level: ConsoleLogLevel, args: unknown[]): void {
   const { title, text } = splitArgs(args)
@@ -64,8 +40,6 @@ export function appendConsoleLog(level: ConsoleLogLevel, args: unknown[]): void 
   if (records.length > MAX_RECORDS) {
     records.splice(0, records.length - MAX_RECORDS)
   }
-
-  writeToFile(record)
 }
 
 /** 取出 seq 之后的记录；after 为 0 时返回整个缓冲 */
@@ -107,61 +81,4 @@ function stringify(value: unknown): string {
   }
 
   return String(value)
-}
-
-function writeToFile(record: LogRecord): void {
-  if (!fileWritable) {
-    return
-  }
-
-  const line = `${formatTimestamp(record.time)} [${record.level}] ${record.title} ${record.text}\n`
-  const bytes = encoder.encode(line).length
-
-  try {
-    if (fileBytes + bytes > MAX_FILE_BYTES) {
-      rotateFile()
-    }
-
-    appendFileSync(logFilePath, line, 'utf-8')
-    fileBytes += bytes
-  } catch {
-    // 磁盘不可写时停掉文件日志，内存缓冲照常，页面仍能看到后续日志
-    fileWritable = false
-  }
-}
-
-/** 把当前文件改名为 .1（旧备份直接覆盖），从空文件重新开始 */
-function rotateFile(): void {
-  const backup = `${logFilePath}.1`
-
-  try {
-    unlinkSync(backup)
-  } catch {
-    // 备份不存在，忽略
-  }
-
-  try {
-    renameSync(logFilePath, backup)
-  } catch {
-    try {
-      unlinkSync(logFilePath)
-    } catch {
-      // 两种方式都失败时继续追加，只是文件会超出上限
-    }
-  }
-
-  fileBytes = 0
-}
-
-function pad(value: number, length = 2): string {
-  return String(value).padStart(length, '0')
-}
-
-function formatTimestamp(time: number): string {
-  const date = new Date(time)
-
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`
-  )
 }

@@ -9,11 +9,9 @@ declare module 'node:fs' {
   export function existsSync(path: string): boolean
   export function readFileSync(path: string, encoding: 'utf-8'): string
   export function writeFileSync(path: string, data: string, encoding: 'utf-8'): void
-  export function appendFileSync(path: string, data: string, encoding: 'utf-8'): void
   export function renameSync(oldPath: string, newPath: string): void
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined
   export function unlinkSync(path: string): void
-  export function statSync(path: string): { size: number }
 }
 
 declare module 'node:path' {
