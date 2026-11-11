@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useModuleStore, useBiliStore, useUIStore } from '@/stores'
-import { Check, Edit, Delete, Rank, Search, Star } from '@element-plus/icons-vue'
+import { Check, Edit, Delete, Rank, Refresh, Search, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import helpInfo from '@/library/help-info'
 import { VueDraggable } from 'vue-draggable-plus'
@@ -442,6 +442,26 @@ const handleEditList = () => openMedalPanel('list')
 /** 编辑优先名单 */
 const handleEditPriorityList = () => openMedalPanel('priority')
 
+/** 重新获取粉丝勋章：忽略当日完成标记，强制从接口重拉，成功后按最新列表补全名单勾选 */
+const handleRefreshMedals = async () => {
+  if (biliStore.fansMedalsStatus === 'loading') {
+    ElMessage.info('正在获取粉丝勋章，请稍候')
+    return
+  }
+
+  medalInfoLoading.value = true
+  try {
+    await moduleStore.rerunModule('Default_FansMedals', true)
+    ElMessage.success(`已获取 ${biliStore.filteredFansMedals.length} 个粉丝勋章`)
+    await nextTick()
+    initSelection()
+  } catch (error) {
+    ElMessage.error(`获取粉丝勋章失败：${(error as Error).message}`)
+  } finally {
+    medalInfoLoading.value = false
+  }
+}
+
 function handleSelect(selection: MedalRow[]) {
   const visibleIds = new Set(filteredMedalRows.value.map((row) => row.roomid))
   const selectedIds = new Set(selection.map((row) => row.roomid))
@@ -787,7 +807,7 @@ watch(
         roomidList2
       </el-text>
       <el-row class="filter-bar" :gutter="8">
-        <el-col :span="11">
+        <el-col :span="9">
           <el-input
             v-model="medalSearchText"
             placeholder="搜索昵称 / 粉丝勋章 / 房间号 / UID"
@@ -795,7 +815,7 @@ watch(
             :prefix-icon="Search"
           />
         </el-col>
-        <el-col :span="7">
+        <el-col :span="5">
           <el-select v-model="medalFilter" style="width: 100%">
             <el-option label="全部" value="all" />
             <el-option-group label="点亮状态">
@@ -808,7 +828,16 @@ watch(
             </el-option-group>
           </el-select>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="5">
+          <el-button
+            :icon="Refresh"
+            :loading="medalInfoLoading || biliStore.fansMedalsStatus === 'loading'"
+            style="width: 100%"
+            @click="handleRefreshMedals"
+            >重新获取
+          </el-button>
+        </el-col>
+        <el-col :span="5">
           <el-button :icon="Rank" style="width: 100%" @click="orderPanelVisible = true"
             >调整顺序
           </el-button>

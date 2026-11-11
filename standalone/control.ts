@@ -552,6 +552,22 @@ function writeMedalList(payload: Record<string, any>): ControlReply {
   return readMedalLists()
 }
 
+/** 强制从接口重新拉取粉丝勋章，成功后返回最新名单与获取状态 */
+async function refreshMedals(): Promise<ControlReply> {
+  if (useBiliStore().fansMedalsStatus === 'loading') {
+    return fail(409, '正在获取粉丝勋章，请稍候')
+  }
+
+  try {
+    await useModuleStore().rerunModule('Default_FansMedals', true)
+  } catch (error) {
+    logger.error(`重新获取粉丝勋章失败：${messageOf(error)}`)
+    return fail(500, messageOf(error))
+  }
+
+  return readMedalLists()
+}
+
 async function dispatch(action: string, payload: Record<string, any>): Promise<ControlReply> {
   switch (action) {
     case 'tasks.get':
@@ -586,6 +602,9 @@ async function dispatch(action: string, payload: Record<string, any>): Promise<C
 
     case 'medals.set':
       return writeMedalList(payload)
+
+    case 'medals.refresh':
+      return refreshMedals()
 
     case 'watch.get':
       return ok(useModuleStore().liveWatchInfo)

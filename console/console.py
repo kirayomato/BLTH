@@ -62,9 +62,10 @@ PROXY_POST = {
     "/api/modules": "modules.set",
     "/api/like": "like.set",
     "/api/medals": "medals.set",
+    "/api/medals/refresh": "medals.refresh",
 }
-# 收集点赞候选要逐个探测直播间，耗时与房间数成正比
-LONG_ACTIONS = {"like.get"}
+# 需要逐个探测直播间或分页拉取的操作，耗时与数据量成正比
+LONG_ACTIONS = {"like.get", "medals.refresh"}
 
 # 头像代理：B 站图床对来自本机页面的 Referer 返回 403，也不带 CORS 头，
 # 浏览器直连必然失败。改由控制台带上正常站点 Referer 取回，页面只访问同源地址。
