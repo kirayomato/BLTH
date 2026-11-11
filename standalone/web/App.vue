@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
+import { CANCELLED_NICK_NAME } from '@/library/utils/constants'
 import type {
   LikeCandidateSnapshot,
   LikeRoomCandidate,
@@ -99,8 +100,11 @@ interface LogRecord {
   text: string
 }
 
-/** 页面保留的记录上限，与服务端缓冲一致 */
-const MAX_LOG_RECORDS = 1000
+/** 页面保留的最短时长：这段时间内的记录不因条数被挤掉，与服务端缓冲一致 */
+const LOG_KEEP_MS = 60 * 60 * 1000
+
+/** 页面渲染上限，仅在保底时长内仍超限时才按条数丢弃 */
+const MAX_LOG_RECORDS = 5000
 
 const logRecords = ref<LogRecord[]>([])
 const logSession = ref('')
@@ -115,44 +119,71 @@ const logViewRef = ref<HTMLElement>()
 /** 已拉取到的最新序号；进程重启后由会话标识变化触发重取 */
 let logLastSeq = 0
 let logTimer: number | undefined
+let logReloadTimer: number | undefined
+/** 每次筛选重取换一代，晚到的旧响应直接丢弃，避免和重扫结果混在一起 */
+let logGeneration = 0
 
-const logModules = computed(() => {
-  const names = new Set<string>()
+/** 模块候选由服务端在整段缓冲里去重给出，不受当前筛选影响 */
+const logModules = ref<string[]>([])
 
-  for (const record of logRecords.value) {
-    if (record.title) {
-      names.add(record.title)
-    }
-  }
+/** 筛选条件变化后的重取延时：关键词逐字输入不该每敲一下都发一次请求 */
+const LOG_RELOAD_DELAY = 300
 
-  return [...names].sort()
-})
-
-const filteredLogs = computed(() => {
-  const keyword = logKeyword.value.trim().toLowerCase()
-  const module = logModule.value
-
-  return logRecords.value.filter((record) => {
-    if (!logLevelFilter.value.includes(record.level)) {
-      return false
-    }
-    if (module && record.title !== module) {
-      return false
-    }
-    if (keyword && !`${record.title} ${record.text}`.toLowerCase().includes(keyword)) {
-      return false
-    }
-    return true
-  })
-})
-
-async function fetchLogs(after: number): Promise<void> {
-  const response = await fetch(`/api/logs?after=${after}`, { cache: 'no-store' })
-  if (!response.ok) {
+/** 按时间保底、条数兜底淘汰：保底时长内的日志不因条数被挤掉 */
+function trimLogRecords(): void {
+  const records = logRecords.value
+  if (records.length <= MAX_LOG_RECORDS) {
     return
   }
 
-  const data = (await response.json()) as { session: string; records: LogRecord[] }
+  // 以最新记录的时间为基准，不依赖浏览器时钟
+  const oldestKept = records[records.length - 1].time - LOG_KEEP_MS
+  let drop = 0
+  while (records.length - drop > MAX_LOG_RECORDS && records[drop].time <= oldestKept) {
+    drop += 1
+  }
+  if (records.length - drop > MAX_LOG_RECORDS) {
+    drop = records.length - MAX_LOG_RECORDS
+  }
+
+  records.splice(0, drop)
+}
+
+/** 等级、模块、关键词都在控制台进程里筛，页面只收要显示的记录 */
+function logQuery(after: number): string {
+  const params = new URLSearchParams({
+    after: String(after),
+    limit: String(MAX_LOG_RECORDS),
+    level: logLevelFilter.value.join(','),
+  })
+
+  if (logModule.value) {
+    params.set('title', logModule.value)
+  }
+  if (logKeyword.value.trim()) {
+    params.set('keyword', logKeyword.value.trim())
+  }
+
+  return params.toString()
+}
+
+async function fetchLogs(after: number): Promise<void> {
+  const generation = logGeneration
+  const response = await fetch(`/api/logs?${logQuery(after)}`, { cache: 'no-store' })
+  if (!response.ok || generation !== logGeneration) {
+    return
+  }
+
+  const data = (await response.json()) as {
+    session: string
+    records: LogRecord[]
+    lastSeq: number
+    modules: string[]
+  }
+
+  if (generation !== logGeneration) {
+    return
+  }
 
   if (data.session !== logSession.value) {
     // 重启后序号从头开始，不清空重取的话增量永远对不上
@@ -166,18 +197,35 @@ async function fetchLogs(after: number): Promise<void> {
     }
   }
 
+  if (data.modules.length > 0) {
+    logModules.value = data.modules
+  }
+
   if (data.records.length === 0) {
+    // 这一轮没有匹配的记录也要推进序号，否则每轮都在重扫同一段
+    logLastSeq = Math.max(logLastSeq, data.lastSeq)
     return
   }
 
   logRecords.value.push(...data.records)
-  if (logRecords.value.length > MAX_LOG_RECORDS) {
-    logRecords.value.splice(0, logRecords.value.length - MAX_LOG_RECORDS)
-  }
+  trimLogRecords()
 
-  logLastSeq = data.records[data.records.length - 1].seq
+  logLastSeq = data.lastSeq
   void scrollLogToBottom()
 }
+
+/** 筛选条件变了就从头重取：序号归零，由服务端按新条件重扫缓冲 */
+function reloadLogs(): void {
+  window.clearTimeout(logReloadTimer)
+  logReloadTimer = window.setTimeout(() => {
+    logGeneration += 1
+    logRecords.value = []
+    logLastSeq = 0
+    void fetchLogs(0)
+  }, LOG_RELOAD_DELAY)
+}
+
+watch([logLevelFilter, logModule, logKeyword], reloadLogs, { deep: true })
 
 async function pollLogs(): Promise<void> {
   try {
@@ -404,6 +452,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.clearTimeout(logTimer)
+  window.clearTimeout(logReloadTimer)
   window.clearTimeout(statusTimer)
   window.clearTimeout(watchTimer)
 })
@@ -777,6 +826,40 @@ const likeLoading = ref(false)
 /** 今日已点赞次数与提示阈值 */
 const todayLikes = ref(0)
 const dailyLimit = ref(0)
+/** 点赞名单的搜索关键字（昵称 / 粉丝勋章 / 房间号 / UID），只影响显示 */
+const likeSearchText = ref('')
+/** 点赞名单的筛选条件，只影响显示 */
+const likeFilter = ref<'all' | 'lighted' | 'unlighted' | 'checked' | 'unchecked'>('all')
+/** 搜索/筛选是否生效 */
+const likeFilterActive = computed(
+  () => likeSearchText.value.trim() !== '' || likeFilter.value !== 'all',
+)
+/** 搜索/筛选后的点赞候选 */
+const filteredLikeCandidates = computed<LikeRoomCandidate[]>(() => {
+  let rows = [...likeCandidates.value]
+  const keyword = likeSearchText.value.trim().toLowerCase()
+
+  if (keyword) {
+    rows = rows.filter(
+      (row) =>
+        row.nick_name.toLowerCase().includes(keyword) ||
+        row.medal_name.toLowerCase().includes(keyword) ||
+        String(row.roomid).includes(keyword) ||
+        String(row.uid).includes(keyword),
+    )
+  }
+  if (likeFilter.value === 'lighted' || likeFilter.value === 'unlighted') {
+    rows = rows.filter((row) => row.is_lighted === (likeFilter.value === 'lighted'))
+  } else if (likeFilter.value === 'checked' || likeFilter.value === 'unchecked') {
+    // 勾选状态实时变化：在「仅已勾选」下取消勾选后该行会立即移出显示
+    const checked = new Set(likeSelection.value.map((row) => row.roomid))
+    rows = rows.filter((row) => checked.has(row.roomid) === (likeFilter.value === 'checked'))
+  }
+
+  return rows
+})
+/** 点赞名单表格最大高度 */
+const likeTableMaxHeight = Math.round(screen.height * 0.55)
 
 /** 收集可点赞的直播间（服务端逐个探测直播状态与点赞进度，可能耗时较久） */
 async function loadLikeCandidates(): Promise<void> {
@@ -811,12 +894,9 @@ async function loadLikeCandidates(): Promise<void> {
     )
 
     // 默认全选，用户再按需去掉不想点赞的房间；亲密度储蓄已满的默认不勾选
+    likeSelection.value = likeCandidates.value.filter((row) => !row.reachFreeIntimacyLimit)
     await nextTick()
-    likeCandidates.value
-      .filter((row) => !row.reachFreeIntimacyLimit)
-      .forEach((row) => {
-        likeTableRef.value?.toggleRowSelection(row, true)
-      })
+    syncLikeSelection()
   } catch (err) {
     likeCandidates.value = []
     ElMessage.error(`获取可点赞直播间失败：${(err as Error).message}`)
@@ -837,6 +917,9 @@ function likePercent(row: LikeRoomCandidate): number {
   return Math.min(100, Math.round(((row.likeProgress as number) / total) * 100))
 }
 
+/** B 站默认头像，头像加载失败时兜底 */
+const NOFACE_AVATAR = '//i0.hdslb.com/bfs/face/member/noface.jpg'
+
 /**
  * 头像地址：经控制台转发，只暴露同源地址
  *
@@ -850,9 +933,43 @@ function avatarUrl(row: { avatar: string }): string {
   return `/api/avatar?url=${encodeURIComponent(url)}`
 }
 
-function handleLikeSelectionChange(rows: LikeRoomCandidate[]): void {
-  likeSelection.value = rows
+/**
+ * 同步勾选
+ *
+ * 表格在数据变化时会清掉不可见行的选中状态，所以不能直接采用事件给出的选中数组：
+ * 搜索/筛选隐藏的行保持原勾选，显示的行以本次选择为准。
+ */
+function handleLikeSelect(selection: LikeRoomCandidate[]): void {
+  const visibleIds = new Set(filteredLikeCandidates.value.map((row) => row.roomid))
+  const selectedIds = new Set(selection.map((row) => row.roomid))
+  const roomids = likeSelection.value
+    .map((row) => row.roomid)
+    .filter((roomid) => !visibleIds.has(roomid) || selectedIds.has(roomid))
+  const known = new Set(roomids)
+
+  likeCandidates.value.forEach((row) => {
+    if (selectedIds.has(row.roomid) && !known.has(row.roomid)) {
+      roomids.push(row.roomid)
+      known.add(row.roomid)
+    }
+  })
+
+  const rowByRoomid = new Map(likeCandidates.value.map((row) => [row.roomid, row]))
+  likeSelection.value = roomids
+    .map((roomid) => rowByRoomid.get(roomid))
+    .filter((row): row is LikeRoomCandidate => Boolean(row))
 }
+
+/** 把已勾选的直播间同步到表格，只处理显示中的行 */
+function syncLikeSelection(): void {
+  const checked = new Set(likeSelection.value.map((row) => row.roomid))
+  filteredLikeCandidates.value.forEach((row) => {
+    likeTableRef.value?.toggleRowSelection(row, checked.has(row.roomid))
+  })
+}
+
+// 搜索/筛选后表格行会被替换，重新按已勾选列表恢复，避免勾选状态丢失
+watch(filteredLikeCandidates, () => nextTick(syncLikeSelection))
 
 /**
  * 点击整行切换勾选。
@@ -953,8 +1070,8 @@ async function runLike(): Promise<void> {
       </div>
 
       <div ref="logViewRef" class="log-view">
-        <p v-if="filteredLogs.length === 0" class="log-empty">没有匹配的日志（debug 默认不显示）</p>
-        <div v-for="record in filteredLogs" :key="record.seq" class="log-line">
+        <p v-if="logRecords.length === 0" class="log-empty">没有匹配的日志（debug 默认不显示）</p>
+        <div v-for="record in logRecords" :key="record.seq" class="log-line">
           <span class="log-time">{{ formatClock(record.time) }}</span>
           <span class="log-level" :class="`lv-${record.level}`">{{ record.level }}</span>
           <span v-if="record.title" class="log-title">{{ record.title }}</span>
@@ -963,7 +1080,8 @@ async function runLike(): Promise<void> {
       </div>
 
       <p class="hint log-footer">
-        内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条；重启任务进程不会清空
+        日志在内存保留最近 1 小时（最多 {{ MAX_LOG_RECORDS }} 条），当前显示
+        {{ logRecords.length }} 条；重启任务进程不会清空
       </p>
     </el-card>
 
@@ -1183,51 +1301,79 @@ async function runLike(): Promise<void> {
       </p>
 
       <div class="row">
+        <el-input
+          v-model="likeSearchText"
+          class="like-search"
+          placeholder="搜索昵称 / 粉丝勋章 / 房间号 / UID"
+          clearable
+        />
+        <el-select v-model="likeFilter" style="width: 160px">
+          <el-option label="全部" value="all" />
+          <el-option-group label="点亮状态">
+            <el-option label="仅已点亮" value="lighted" />
+            <el-option label="仅未点亮" value="unlighted" />
+          </el-option-group>
+          <el-option-group label="勾选状态">
+            <el-option label="仅已勾选" value="checked" />
+            <el-option label="仅未勾选" value="unchecked" />
+          </el-option-group>
+        </el-select>
         <el-button :loading="likeLoading" @click="loadLikeCandidates">获取可点赞直播间</el-button>
-        <span v-if="dailyLimit > 0" class="label">
-          今日已点亮勋章点赞 {{ todayLikes }} 次（提示阈值 {{ dailyLimit }}，未点亮勋章的点赞不计数）
-        </span>
       </div>
+
+      <p v-if="dailyLimit > 0" class="hint">
+        今日已点亮勋章点赞 {{ todayLikes }} 次（提示阈值 {{ dailyLimit }}，未点亮勋章的点赞不计数）。
+        亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。
+      </p>
 
       <el-table
         v-if="likeCandidates.length > 0"
         ref="likeTableRef"
-        :data="likeCandidates"
+        :data="filteredLikeCandidates"
         row-key="roomid"
-        size="small"
-        :max-height="360"
+        :max-height="likeTableMaxHeight"
         class="like-table"
-        @selection-change="handleLikeSelectionChange"
+        :empty-text="likeFilterActive ? '没有匹配的直播间' : '没有可点赞的直播间'"
+        @select="handleLikeSelect"
+        @select-all="handleLikeSelect"
         @row-click="handleLikeRowClick"
       >
-        <el-table-column type="selection" width="45" />
-        <el-table-column label="主播" min-width="150">
+        <el-table-column type="selection" align="center" width="60" />
+        <el-table-column label="头像" width="90">
           <template #default="scope">
-            <div class="anchor-cell">
-              <el-avatar :size="24" :src="avatarUrl(scope.row)" />
-              <span class="anchor-name">{{ scope.row.nick_name }}</span>
+            <div class="avatar-wrap">
+              <el-image :src="avatarUrl(scope.row)" loading="lazy" class="avatar">
+                <template #error>
+                  <el-image :src="avatarUrl({ avatar: NOFACE_AVATAR })" class="avatar" />
+                </template>
+              </el-image>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="UID" width="110">
+        <el-table-column label="昵称" min-width="110">
           <template #default="scope">
-            <a
-              class="link"
-              :href="`https://space.bilibili.com/${scope.row.uid}`"
-              target="_blank"
-              rel="noreferrer"
-              @click.stop
+            <span>{{ scope.row.nick_name }}</span>
+            <el-tag
+              v-if="scope.row.nick_name === CANCELLED_NICK_NAME"
+              type="info"
+              size="small"
+              effect="plain"
+              class="cancelled-tag"
             >
-              {{ scope.row.uid }}
-            </a>
+              已注销
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="medal_name" label="粉丝勋章" min-width="90" />
-        <el-table-column prop="medal_level" label="等级" width="60" align="center" />
-        <el-table-column label="点亮" width="80" align="center">
-          <template #default="scope">{{ scope.row.is_lighted ? '已点亮' : '未点亮' }}</template>
+        <el-table-column prop="medal_name" label="粉丝勋章" min-width="100" />
+        <el-table-column prop="medal_level" label="等级" width="70" align="center" />
+        <el-table-column label="点亮状态" width="90" align="center">
+          <template #default="scope">
+            <el-tag :type="scope.row.is_lighted ? 'success' : 'info'" size="small" effect="plain">
+              {{ scope.row.is_lighted ? '已点亮' : '未点亮' }}
+            </el-tag>
+          </template>
         </el-table-column>
-        <el-table-column label="亲密度" width="90" align="center">
+        <el-table-column label="亲密度储蓄" width="120" align="center">
           <template #default="scope">
             <el-tag
               v-if="scope.row.reachFreeIntimacyLimit"
@@ -1237,13 +1383,17 @@ async function runLike(): Promise<void> {
             >
               已满 {{ scope.row.freeIntimacy }}
             </el-tag>
-            <span v-else-if="typeof scope.row.freeIntimacy === 'number'">
+            <el-text
+              v-else-if="typeof scope.row.freeIntimacy === 'number'"
+              type="info"
+              size="small"
+            >
               {{ scope.row.freeIntimacy }}
-            </span>
-            <span v-else>—</span>
+            </el-text>
+            <el-text v-else type="info">—</el-text>
           </template>
         </el-table-column>
-        <el-table-column label="点赞进度" width="140">
+        <el-table-column label="点赞进度" width="150">
           <template #default="scope">
             <template v-if="hasLikeProgress(scope.row)">
               <el-progress
@@ -1251,30 +1401,43 @@ async function runLike(): Promise<void> {
                 :stroke-width="6"
                 :show-text="false"
               />
-              <span class="progress-text">
+              <el-text size="small">
                 {{ scope.row.likeProgress }} / {{ scope.row.likeProgressTotal }}
-              </span>
+              </el-text>
             </template>
-            <span v-else>—</span>
+            <el-text v-else type="info">—</el-text>
           </template>
         </el-table-column>
-        <el-table-column label="房间号" width="100">
+        <el-table-column label="房间号" width="120">
           <template #default="scope">
-            <a
-              class="link"
+            <el-link
               :href="`https://live.bilibili.com/${scope.row.roomid}`"
-              target="_blank"
               rel="noreferrer"
+              type="primary"
+              target="_blank"
               @click.stop
             >
               {{ scope.row.roomid }}
-            </a>
+            </el-link>
+          </template>
+        </el-table-column>
+        <el-table-column label="UID" width="120">
+          <template #default="scope">
+            <el-link
+              :href="`https://space.bilibili.com/${scope.row.uid}`"
+              rel="noreferrer"
+              type="primary"
+              target="_blank"
+              @click.stop
+            >
+              {{ scope.row.uid }}
+            </el-link>
           </template>
         </el-table-column>
       </el-table>
 
       <div v-if="likeCandidates.length > 0" class="row">
-        <el-button type="primary" @click="runLike">
+        <el-button type="primary" :disabled="likeSelection.length === 0" @click="runLike">
           开始点赞（已选 {{ likeSelection.length }}）
         </el-button>
       </div>
@@ -1439,13 +1602,29 @@ async function runLike(): Promise<void> {
   margin-top: 12px;
 }
 
-/* small 尺寸默认只有 4px 上下内边距，行挨得太紧；两张列表统一放宽 */
-.like-table :deep(.el-table__cell) {
+/* small 尺寸默认只有 4px 上下内边距，行挨得太紧；勋章名单表格放宽 */
+.like-table.el-table--small :deep(.el-table__cell) {
   padding: 8px 0;
 }
 
 .like-table :deep(.el-table__row) {
   cursor: pointer;
+}
+
+.avatar-wrap {
+  width: 80px;
+  height: 80px;
+}
+
+.avatar {
+  width: 80px;
+  height: 80px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.cancelled-tag {
+  margin-left: 4px;
 }
 
 .anchor-cell {
@@ -1470,7 +1649,8 @@ async function runLike(): Promise<void> {
   text-decoration: underline;
 }
 
-.medal-search {
+.medal-search,
+.like-search {
   flex: 1;
   min-width: 200px;
 }
@@ -1494,11 +1674,6 @@ async function runLike(): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.progress-text {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 
 .log-toolbar {

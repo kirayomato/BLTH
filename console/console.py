@@ -28,6 +28,7 @@ import time
 import uuid
 from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import islice
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
@@ -35,6 +36,10 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent.parent
 CONSOLE_DIR = Path(__file__).resolve().parent
 MAX_RECORDS = 10000
+# 日志保底保留时长：条数超限时，这段时间内的记录一条都不丢，避免密集日志把刚产生的行挤掉
+MIN_KEEP_SECONDS = 3600
+# 保底时长内仍持续增长时的兜底，防止突发日志吃光内存
+HARD_MAX_RECORDS = 50000
 MAX_BODY = 10 * 1024 * 1024
 
 # 没有 dist-web 时使用的精简页
@@ -184,11 +189,14 @@ class LogBuffer:
 
     seq 全局单调递增，重启任务进程不重置：页面按 seq 增量拉取，日志保持连续。
     session 只在控制台自身重启时变化，页面据此丢弃旧缓冲重取。
+
+    淘汰按时间保底、条数兜底：条数超过上限时只丢已经超过保底时长的记录，
+    保底时长内即使超过上限也保留，直到触到硬上限才不计年龄丢弃。
     """
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.records: deque[dict] = deque(maxlen=MAX_RECORDS)
+        self.records: deque[dict] = deque()
         self.next_seq = 1
         self.session = uuid.uuid4().hex[:8]
 
@@ -197,26 +205,85 @@ class LogBuffer:
         if title is None:
             title = match.group(1) if match else ""
         text = line[match.end() :].strip() if match else line.strip()
+        now = int(time.time() * 1000)
 
         with self.lock:
             self.records.append(
                 {
                     "seq": self.next_seq,
-                    "time": int(time.time() * 1000),
+                    "time": now,
                     "level": level,
                     "title": title,
                     "text": text,
                 }
             )
+            self._trim(now)
             self.next_seq += 1
 
         print_line(level, title, text)
 
-    def since(self, after: int) -> dict:
+    def _trim(self, now: int) -> None:
+        """丢弃旧记录；调用方必须持有 self.lock。
+
+        记录按时间递增入队，队首一旦在保底期内即可停止按时间淘汰。
+        """
+        oldest_kept = now - MIN_KEEP_SECONDS * 1000
+        while len(self.records) > MAX_RECORDS and self.records[0]["time"] <= oldest_kept:
+            self.records.popleft()
+        while len(self.records) > HARD_MAX_RECORDS:
+            self.records.popleft()
+
+    def since(
+        self,
+        after: int,
+        limit: int = 0,
+        *,
+        levels: set[str] | None = None,
+        title: str = "",
+        keyword: str = "",
+    ) -> dict:
+        """按序号增量取日志，筛选在服务端完成。
+
+        ``levels`` 为空表示不限等级；``title`` 是模块名，空表示不限；
+        ``keyword`` 匹配「模块 + 正文」的小写子串，与页面原先的本地筛选同义。
+
+        响应里的 ``modules`` 只在从头取（``after`` 为 0）时计算，供页面刷新下拉候选；
+        ``lastSeq`` 是缓冲里最新的序号，没有记录命中筛选时页面也要靠它前移游标，
+        否则每一轮都会重扫同一段。
+        """
+        needle = keyword.lower()
+
         with self.lock:
+            # 缓冲内的序号连续，可以按序号差直接跳到未读位置，不必每轮扫全量
+            starting = 0
+            if after > 0 and self.records:
+                starting = max(0, after - self.records[0]["seq"] + 1)
+
+            # 模块候选按整段缓冲去重，只在从头取时算一次
+            modules = (
+                sorted({record["title"] for record in self.records if record["title"]})
+                if after == 0
+                else []
+            )
+
+            records = []
+            for record in islice(self.records, starting, None):
+                if levels and record["level"] not in levels:
+                    continue
+                if title and record["title"] != title:
+                    continue
+                if needle and needle not in f'{record["title"]} {record["text"]}'.lower():
+                    continue
+                records.append(record)
+
+            if limit > 0:
+                records = records[-limit:]
+
             return {
                 "session": self.session,
-                "records": [record for record in self.records if record["seq"] > after],
+                "records": records,
+                "lastSeq": self.next_seq - 1,
+                "modules": modules,
             }
 
 
@@ -612,11 +679,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/logs":
+            query = parse_qs(url.query)
             try:
-                after = int(parse_qs(url.query).get("after", ["0"])[0])
+                after = int(query.get("after", ["0"])[0])
             except ValueError:
                 after = 0
-            self._send_json(200, self.logs.since(after))
+            try:
+                limit = int(query.get("limit", ["0"])[0])
+            except ValueError:
+                limit = 0
+            levels = {
+                level.strip()
+                for level in query.get("level", [""])[0].split(",")
+                if level.strip()
+            }
+            self._send_json(
+                200,
+                self.logs.since(
+                    after,
+                    limit,
+                    levels=levels or None,
+                    title=query.get("title", [""])[0].strip(),
+                    keyword=query.get("keyword", [""])[0].strip(),
+                ),
+            )
             return
 
         if path == "/api/status":

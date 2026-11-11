@@ -4,8 +4,8 @@ import type { RunAtMoment } from '@/types'
 import { ts } from '@/library/luxon'
 import { useBiliStore } from '@/stores'
 
-/** 粉丝勋章面板里「账号已注销」用户的昵称 */
-const CANCELLED_NICK_NAME = '账号已注销'
+/** 粉丝勋章面板里「账号已注销」用户的昵称；单独成文件，导入时不牵出 stores */
+export { CANCELLED_NICK_NAME } from './constants'
 
 /**
  * 生成一个 version 4 uuid
@@ -250,5 +250,4 @@ export {
   createFetchInputWithNewUrl,
   waitForMoment,
   arrayToMap,
-  CANCELLED_NICK_NAME,
 }
