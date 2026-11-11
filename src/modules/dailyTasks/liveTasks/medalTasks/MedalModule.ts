@@ -134,7 +134,7 @@ class MedalModule extends BaseModule {
   ): Promise<{ status: number | null; canTryNextPage: boolean }> {
     try {
       const response = await BAPI.live.fansMedalPanel(page)
-      this.logger.log(`BAPI.live.fansMedalPanel(${page}) response`, response)
+      this.logger.debug(`BAPI.live.fansMedalPanel(${page}) response`, response)
       let status = null
 
       if (response.code === 0) {

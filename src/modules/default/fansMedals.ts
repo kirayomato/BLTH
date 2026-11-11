@@ -18,7 +18,7 @@ class FansMedals extends BaseModule {
     let total_page = 1
     try {
       const firstPageResponse = await BAPI.live.fansMedalPanel(1)
-      this.logger.log('BAPI.live.fansMedalPanel(1) response', firstPageResponse)
+      this.logger.debug('BAPI.live.fansMedalPanel(1) response', firstPageResponse)
       if (firstPageResponse.code === 0) {
         total_page = firstPageResponse.data.page_info.total_page
         // 第一页的 list 缺少当前佩戴和最近获得的勋章，需通过 special_list 获取
@@ -28,7 +28,7 @@ class FansMedals extends BaseModule {
       }
       for (let page = 2; page <= Math.min(total_page, pages); page++) {
         const response = await BAPI.live.fansMedalPanel(page)
-        this.logger.log(`BAPI.live.fansMedalPanel(${page}) response`, response)
+        this.logger.debug(`BAPI.live.fansMedalPanel(${page}) response`, response)
         if (response.code !== 0) {
           this.logger.error(`获取粉丝勋章列表第${page}页失败，提前结束获取`, response.message)
           // 中途出错，保留已获取的粉丝勋章列表，不抛出错误
