@@ -13,6 +13,7 @@ import { arrayToMap, sleep } from '@/library/utils'
 import type { LiveData } from '@/library/bili-api/data'
 import BAPI, { MEDAL_PANEL_PAGE_SIZE } from '@/library/bili-api'
 import { tsm } from '@/library/luxon'
+import Logger from '@/library/logger'
 import _ from 'lodash'
 
 class MedalModule extends BaseModule {
@@ -33,6 +34,8 @@ class MedalModule extends BaseModule {
   private static readonly LIVE_STATUS_SNAPSHOT_FRESHNESS_THRESHOLD = 60_000
   /** 直播状态快照（key：直播间号） */
   private static readonly liveStatusSnapshots = new Map<number, LiveStatusSnapshot>()
+  /** 静态方法使用的日志器；实例方法使用继承的 this.logger */
+  private static readonly logger = new Logger('MedalModule')
 
   medalTasksConfig = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks
 
@@ -131,7 +134,7 @@ class MedalModule extends BaseModule {
   ): Promise<{ status: number | null; canTryNextPage: boolean }> {
     try {
       const response = await BAPI.live.fansMedalPanel(page)
-      console.log(`BAPI.live.fansMedalPanel(${page}) response`, response)
+      this.logger.log(`BAPI.live.fansMedalPanel(${page}) response`, response)
       let status = null
 
       if (response.code === 0) {
@@ -161,9 +164,9 @@ class MedalModule extends BaseModule {
           canTryNextPage: currentPage < totalPage && !hasUnlightedMedal,
         }
       }
-      console.warn(`BAPI.live.fansMedalPanel(${page}) 失败`, response.message)
+      this.logger.warn(`BAPI.live.fansMedalPanel(${page}) 失败`, response.message)
     } catch (error) {
-      console.warn(`BAPI.live.fansMedalPanel(${page}) 出错`, error)
+      this.logger.warn(`BAPI.live.fansMedalPanel(${page}) 出错`, error)
     }
     return { status: null, canTryNextPage: false }
   }
@@ -204,15 +207,15 @@ class MedalModule extends BaseModule {
     async (roomid) => {
       try {
         const response = await BAPI.live.getInfoByRoom(roomid)
-        console.debug(`BAPI.live.getInfoByRoom(${roomid}) response`, response)
+        this.logger.debug(`BAPI.live.getInfoByRoom(${roomid}) response`, response)
         if (response.code === 0) {
           const liveStatus = response.data.room_info.live_status
           MedalModule.liveStatusSnapshots.set(roomid, { liveStatus, observedAt: tsm() })
           return liveStatus
         }
-        console.warn(`BAPI.live.getInfoByRoom(${roomid}) 失败`, response.message)
+        this.logger.warn(`BAPI.live.getInfoByRoom(${roomid}) 失败`, response.message)
       } catch (error) {
-        console.warn(`BAPI.live.getInfoByRoom(${roomid}) 出错`, error)
+        this.logger.warn(`BAPI.live.getInfoByRoom(${roomid}) 出错`, error)
       }
 
       return null
@@ -309,21 +312,21 @@ class MedalModule extends BaseModule {
       const response = await BAPI.live.getActivatedMedalInfo(targetId)
       if (response.code !== 0) {
         // 未点亮的勋章可能直接返回非 0，调用频次高，这里只留 debug 级别日志
-        console.error(`BAPI.live.getActivatedMedalInfo(${targetId}) 失败`, response.message)
+        MedalModule.logger.error(`BAPI.live.getActivatedMedalInfo(${targetId}) 失败`, response.message)
         return null
       }
-      console.debug('BAPI.live.getActivatedMedalInfo response', response)
+      MedalModule.logger.debug('BAPI.live.getActivatedMedalInfo response', response)
       const data = response.data
       if (!data) {
         return null
       }
       const isLighted = Boolean(data.is_lighted)
       if (isLighted && data.reach_free_intimacy_limit) {
-        console.warn(
+        MedalModule.logger.warn(
           `${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`,
         )
       } else if (data.free_intimacy > 0) {
-        console.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`)
+        MedalModule.logger.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`)
       }
       return {
         isLighted: isLighted,
@@ -332,7 +335,7 @@ class MedalModule extends BaseModule {
         tasks: data.task_info ?? [],
       }
     } catch (error) {
-      console.error('获取粉丝勋章信息出错:', error)
+      MedalModule.logger.error('获取粉丝勋章信息出错:', error)
       return null
     }
   }
