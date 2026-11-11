@@ -742,6 +742,13 @@ watch(
           >优先名单
         </el-button>
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.priority" />
+        <el-button
+          size="small"
+          :icon="Refresh"
+          :loading="medalInfoLoading || biliStore.fansMedalsStatus === 'loading'"
+          @click="handleRefreshMedals"
+          >重新获取
+        </el-button>
       </el-space>
     </el-row>
     <el-divider />
@@ -807,7 +814,7 @@ watch(
         roomidList2
       </el-text>
       <el-row class="filter-bar" :gutter="8">
-        <el-col :span="9">
+        <el-col :span="11">
           <el-input
             v-model="medalSearchText"
             placeholder="搜索昵称 / 粉丝勋章 / 房间号 / UID"
@@ -815,7 +822,7 @@ watch(
             :prefix-icon="Search"
           />
         </el-col>
-        <el-col :span="5">
+        <el-col :span="7">
           <el-select v-model="medalFilter" style="width: 100%">
             <el-option label="全部" value="all" />
             <el-option-group label="点亮状态">
@@ -828,16 +835,7 @@ watch(
             </el-option-group>
           </el-select>
         </el-col>
-        <el-col :span="5">
-          <el-button
-            :icon="Refresh"
-            :loading="medalInfoLoading || biliStore.fansMedalsStatus === 'loading'"
-            style="width: 100%"
-            @click="handleRefreshMedals"
-            >重新获取
-          </el-button>
-        </el-col>
-        <el-col :span="5">
+        <el-col :span="6">
           <el-button :icon="Rank" style="width: 100%" @click="orderPanelVisible = true"
             >调整顺序
           </el-button>

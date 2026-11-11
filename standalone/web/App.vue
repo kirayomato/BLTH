@@ -997,7 +997,12 @@ async function runLike(): Promise<void> {
             <span class="group-name">粉丝勋章名单</span>
             <span v-if="!medalExpanded" class="task-hint">{{ medalSummary }}</span>
           </button>
-          <span v-if="medalSaving" class="task-hint">保存中…</span>
+          <div class="card-actions">
+            <span v-if="medalSaving" class="task-hint">保存中…</span>
+            <el-button size="small" :loading="medalRefreshing" @click="refreshMedals"
+              >重新获取
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -1057,7 +1062,6 @@ async function runLike(): Promise<void> {
               <el-option label="仅未勾选" value="unchecked" />
             </el-option-group>
           </el-select>
-          <el-button :loading="medalRefreshing" @click="refreshMedals">重新获取</el-button>
           <el-button @click="resetMedalOrder">恢复表格顺序</el-button>
           <el-button @click="medalOrderVisible = true">调整顺序</el-button>
         </div>
@@ -1358,6 +1362,12 @@ async function runLike(): Promise<void> {
   gap: 12px;
   align-items: center;
   justify-content: space-between;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 /* 标题整体可点：点击区域不只是那个小三角 */
