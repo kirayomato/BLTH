@@ -5,6 +5,7 @@ import type {
   LikeCandidateSnapshot,
   LikeRoomCandidate,
 } from '@/modules/dailyTasks/liveTasks/medalTasks/types'
+import type { LiveWatchInfo } from '@/stores'
 
 interface TaskView {
   id: string
@@ -398,12 +399,46 @@ onMounted(() => {
   loadConfigJson()
   void pollLogs()
   void pollStatus()
+  void pollWatch()
 })
 
 onUnmounted(() => {
   window.clearTimeout(logTimer)
   window.clearTimeout(statusTimer)
+  window.clearTimeout(watchTimer)
 })
+
+/* ---------------- 观看直播进度 ---------------- */
+
+const liveWatchInfo = ref<LiveWatchInfo | null>(null)
+let watchTimer: number | undefined
+
+const watchPercent = computed(() => {
+  const info = liveWatchInfo.value
+  if (!info || info.total <= 0) return 0
+  return Math.min(100, Math.round((info.progress / info.total) * 100))
+})
+
+async function fetchWatch(): Promise<void> {
+  const response = await fetch('/api/watch', { cache: 'no-store' })
+  if (response.ok) {
+    const info = (await response.json()) as Partial<LiveWatchInfo> | null
+    // 空闲时控制通道把 null 折叠成空对象，按字段判定而不是按真值
+    liveWatchInfo.value = info?.roomId != null ? (info as LiveWatchInfo) : null
+  }
+}
+
+async function pollWatch(): Promise<void> {
+  try {
+    if (!document.hidden) {
+      await fetchWatch()
+    }
+  } catch {
+    // 控制台重启期间保留上一次数据
+  } finally {
+    watchTimer = window.setTimeout(pollWatch, 2000)
+  }
+}
 
 /* ---------------- 粉丝勋章名单 ---------------- */
 
@@ -901,6 +936,28 @@ async function runLike(): Promise<void> {
 
       <p class="hint log-footer">
         内存保留最近 {{ MAX_LOG_RECORDS }} 条，当前显示 {{ filteredLogs.length }} 条；重启任务进程不会清空
+      </p>
+    </el-card>
+
+    <el-card v-if="liveWatchInfo" shadow="never" class="card">
+      <template #header>
+        <span class="group-name">观看直播进度</span>
+      </template>
+
+      <p class="hint">
+        正在观看：{{ liveWatchInfo.roomName }}（{{ liveWatchInfo.roomId }}）· 第
+        {{ liveWatchInfo.roomIndex }}/{{ liveWatchInfo.totalRooms }} 个
+      </p>
+
+      <el-progress
+        :percentage="watchPercent"
+        :stroke-width="12"
+        :show-text="false"
+        style="margin-top: 8px"
+      />
+
+      <p class="hint" style="margin-top: 8px">
+        进度 {{ liveWatchInfo.progress }} / {{ liveWatchInfo.total }}
       </p>
     </el-card>
 

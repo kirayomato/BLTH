@@ -42,6 +42,13 @@ const config = moduleStore.moduleConfig.DailyTasks.LiveTasks
 const status = moduleStore.moduleStatus.DailyTasks.LiveTasks
 const reset = moduleStore.moduleReset.DailyTasks.LiveTasks
 
+const liveWatchInfo = computed(() => moduleStore.liveWatchInfo)
+const watchPercent = computed(() => {
+  const info = liveWatchInfo.value
+  if (!info || info.total <= 0) return 0
+  return Math.min(100, Math.round((info.progress / info.total) * 100))
+})
+
 const medalDanmuPanelVisible = ref<boolean>(false)
 const danmuTableData = computed(() =>
   config.medalTasks.light.danmuList.map((danmu) => {
@@ -682,6 +689,23 @@ watch(
         <TaskStatus :status="status.medalTasks.watch" @click="reset.medalTasks.watch" />
       </el-space>
     </el-row>
+    <el-row v-if="liveWatchInfo">
+      <el-space wrap :size="[8, 0]" class="watch-progress">
+        <el-text type="info">
+          正在观看：{{ liveWatchInfo.roomName }}（{{ liveWatchInfo.roomId }}）· 第
+          {{ liveWatchInfo.roomIndex }}/{{ liveWatchInfo.totalRooms }} 个
+        </el-text>
+        <el-progress
+          :percentage="watchPercent"
+          :stroke-width="12"
+          :show-text="false"
+          style="width: 160px"
+        />
+        <el-text size="small" type="info">
+          {{ liveWatchInfo.progress }} / {{ liveWatchInfo.total }}
+        </el-text>
+      </el-space>
+    </el-row>
     <el-row>
       <el-space wrap :size="[8, 0]">
         <el-switch
@@ -1015,6 +1039,10 @@ watch(
 
 .filter-bar {
   margin-bottom: 8px;
+}
+
+.watch-progress {
+  margin-top: 2px;
 }
 
 /* 窗口内搜索提示文字用小字号，输入内容字号不变 */

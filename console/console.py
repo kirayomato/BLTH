@@ -34,8 +34,8 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 CONSOLE_DIR = Path(__file__).resolve().parent
-MAX_RECORDS = 1000
-MAX_BODY = 4 * 1024 * 1024
+MAX_RECORDS = 10000
+MAX_BODY = 10 * 1024 * 1024
 
 # 没有 dist-web 时使用的精简页
 FALLBACK_FILE = CONSOLE_DIR / "fallback.html"
@@ -55,6 +55,7 @@ PROXY_GET = {
     "/api/modules": "modules.get",
     "/api/like": "like.get",
     "/api/medals": "medals.get",
+    "/api/watch": "watch.get",
 }
 PROXY_POST = {
     "/api/tasks": "tasks.set",

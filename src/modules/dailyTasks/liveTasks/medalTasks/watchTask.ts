@@ -190,6 +190,11 @@ class RoomHeart {
           this.logger.log(`${this.uname}(${this.roomID}) 获取不到观看直播进度，结束观看`)
           return
         }
+        const liveWatchInfo = useModuleStore().liveWatchInfo
+        if (liveWatchInfo?.roomId === this.roomID) {
+          liveWatchInfo.progress = prog
+          liveWatchInfo.total = total
+        }
         if (prog != this.progress) {
           this.progress = prog;
           this.logger.log(`${this.uname}(${this.roomID}) 观看直播进度: ${prog}/${total}`)
@@ -420,15 +425,29 @@ class WatchTask extends MedalModule {
             `粉丝勋章【${medal.medal.medal_name}】 开始直播间 ${roomid}（主播【${uname}】，UID：${uid}）的观看直播任务，本次目标进度: +${targetProgress}，当前进度: ${prog}/${total}，设定观看时间: ${watchMinutes}分钟`,
           )
 
-          await new RoomHeart(
-            roomid,
-            uname,
-            area_id,
-            parent_area_id,
-            uid,
-            watchMinutes,
-            prog
-          ).start()
+          useModuleStore().liveWatchInfo = {
+            roomId: roomid,
+            roomName: uname,
+            progress: prog,
+            total,
+            roomIndex: i + 1,
+            totalRooms: fansMedals.length,
+          }
+
+          try {
+            await new RoomHeart(
+              roomid,
+              uname,
+              area_id,
+              parent_area_id,
+              uid,
+              watchMinutes,
+              prog
+            ).start()
+          } finally {
+            // 心跳正常达标或抛异常都要清除，避免面板残留上一个直播间
+            useModuleStore().liveWatchInfo = null
+          }
         }
       }
 

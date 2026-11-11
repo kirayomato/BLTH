@@ -15,6 +15,22 @@ import type BaseModule from '@/modules/BaseModule'
 import ModuleCriticalError from '@/library/error/ModuleCriticalError'
 import ModuleError from '@/library/error/ModuleError'
 
+/** 观看直播任务的实时观看信息，供控制面板显示「当前观看直播间与进度」 */
+export interface LiveWatchInfo {
+  /** 正在观看的直播间号 */
+  roomId: number
+  /** 主播昵称 */
+  roomName: string
+  /** 当前观看进度（亲密度点数） */
+  progress: number
+  /** 进度上限（亲密度点数） */
+  total: number
+  /** 当前正在观看的房间序号（从 1 开始） */
+  roomIndex: number
+  /** 本轮需要观看的房间总数 */
+  totalRooms: number
+}
+
 const defaultModuleStatus: ModuleStatus = {
   DailyTasks: {
     MainSiteTasks: {
@@ -47,6 +63,8 @@ export const useModuleStore = defineStore('module', () => {
   const moduleStatus = ref<ModuleStatus>(defaultModuleStatus)
   // 模块实例映射（key: 模块名称, value: 模块实例）
   const moduleInstances = ref<Record<string, BaseModule>>({})
+  // 观看直播任务的实时观看信息（当前直播间与进度），由任务直接写入供面板展示
+  const liveWatchInfo = ref<LiveWatchInfo | null>(null)
   // 模块状态、运行记录重置和再运行
   const moduleReset = ref<ModuleReset>({
     DailyTasks: {
@@ -298,6 +316,7 @@ export const useModuleStore = defineStore('module', () => {
     moduleInstances,
     moduleReset,
     moduleStatus,
+    liveWatchInfo,
     loadModules,
     rerunModule,
   }

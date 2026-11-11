@@ -587,6 +587,9 @@ async function dispatch(action: string, payload: Record<string, any>): Promise<C
     case 'medals.set':
       return writeMedalList(payload)
 
+    case 'watch.get':
+      return ok(useModuleStore().liveWatchInfo)
+
     default:
       return fail(404, `未知操作 ${action}`)
   }
