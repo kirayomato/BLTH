@@ -1,6 +1,7 @@
 import { useBiliStore, useModuleStore } from '@/stores'
 import BAPI from '@/library/bili-api'
 import type { LiveData } from '@/library/bili-api/data'
+import type { Live } from '@/library/bili-api/response'
 import { delayToNextMoment, isTimestampToday } from '@/library/luxon'
 import { sleep, CANCELLED_NICK_NAME } from '@/library/utils'
 import BaseModule from '@/modules/BaseModule'
@@ -13,12 +14,25 @@ class FansMedals extends BaseModule {
    *
    * @param pages 获取的页数
    */
+  static logFansMedals(fansmedal: Live.FansMedalPanel): string {
+    if (fansmedal.code != 0)
+      return `Error Code: ${fansmedal.code}`
+    let result = ""
+    const medal_arr = [...fansmedal.data.list, ...fansmedal.data.special_list]
+    for (const _list of medal_arr) {
+      const medal = _list.medal
+      const anchor_info = _list.anchor_info
+      result += `${anchor_info.nick_name} / ${medal.medal_name} / Lv.${medal.level}\n`
+    }
+    return result
+  }
   private async getFansMedals(pages = Infinity): Promise<LiveData.FansMedalPanel.List[]> {
     const fansMedalList: LiveData.FansMedalPanel.List[] = []
     let total_page = 1
     try {
       const firstPageResponse = await BAPI.live.fansMedalPanel(1)
       this.logger.debug('BAPI.live.fansMedalPanel(1) response', firstPageResponse)
+      this.logger.log("勋章列表(1)\n", FansMedals.logFansMedals(firstPageResponse))
       if (firstPageResponse.code === 0) {
         total_page = firstPageResponse.data.page_info.total_page
         // 第一页的 list 缺少当前佩戴和最近获得的勋章，需通过 special_list 获取
@@ -29,6 +43,7 @@ class FansMedals extends BaseModule {
       for (let page = 2; page <= Math.min(total_page, pages); page++) {
         const response = await BAPI.live.fansMedalPanel(page)
         this.logger.debug(`BAPI.live.fansMedalPanel(${page}) response`, response)
+        this.logger.log(`勋章列表((${page})\n`, FansMedals.logFansMedals(response))
         if (response.code !== 0) {
           this.logger.error(`获取粉丝勋章列表第${page}页失败，提前结束获取`, response.message)
           // 中途出错，保留已获取的粉丝勋章列表，不抛出错误
