@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """独立运行版的 Web 控制台。
 
-控制台是常驻进程，任务进程是它拉起的子进程。重启因此是一次进程替换：
-停止旧进程会连同在途请求一起结束，新进程从磁盘重新读取配置和 cookie 并全量运行任务。
-配置页面由控制台提供，重启期间不会断线。
+控制台是常驻进程，为每个账号各拉起一个任务进程（每个进程 = 一个账号，独立的数据目录与
+cookie，互不影响）。重启因此是一次进程替换：停止旧进程会连同在途请求一起结束，新进程从磁盘
+重新读取配置和 cookie 并全量运行任务。配置页面由控制台提供，重启期间不会断线。
 
 配置与点赞请求经由 stdin/stdout 上的单行 JSON 控制通道转发给任务进程；控制台自己不写
 ``storage.json``，文件的唯一写入方始终是任务进程，因此不存在两边并发覆盖。
@@ -30,7 +30,7 @@ from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,8 +42,28 @@ MIN_KEEP_SECONDS = 3600
 HARD_MAX_RECORDS = 50000
 MAX_BODY = 10 * 1024 * 1024
 
+# 多账号：每个账号是 data/accounts/<别名>/ 下的一个子目录，含 cookie.txt 与 storage.json
+ACCOUNTS_ROOT = ROOT / "data" / "accounts"
+# 账号作用域接口的前缀，其后依次是账号名与子路径
+ACCOUNT_PREFIX = "/api/accounts/"
+# 旧版单账号数据在根目录，首启时复制成默认账号（原文件保留）
+LEGACY_STORAGE = ROOT / "data" / "storage.json"
+LEGACY_COOKIE = ROOT / "cookie.txt"
+DEFAULT_ACCOUNT = "默认"
+
 # 没有 dist-web 时使用的精简页
 FALLBACK_FILE = CONSOLE_DIR / "fallback.html"
+
+# 账号名就是目录名，不允许夹带路径分隔符等会造成越界的字符
+INVALID_NAME_CHARS = set('/\\:*?"<>|')
+
+def valid_account_name(name: str) -> bool:
+    return (
+        bool(name)
+        and not name.startswith(".")
+        and name not in (".", "..")
+        and not any(c in INVALID_NAME_CHARS for c in name)
+    )
 
 # 控制行前缀，必须与 standalone/control.ts 的 CONTROL_PREFIX 一致
 CONTROL_PREFIX = "\x1eBLTHCTL"
@@ -55,19 +75,20 @@ LOGGER_PREFIX = re.compile(r"^BLTH\[[^\]]*\]((?:\[[^\]]*\])*):")
 ERROR_HINTS = ("出错", "失败", "错误", "error", "Error")
 
 # 由控制台转发到任务进程的操作；其余接口（状态、日志、重启、页面）由控制台自己处理
+# 键是 /api/accounts/<账号名>/ 之后的子路径（无前导斜杠），代理到对应账号的任务进程
 PROXY_GET = {
-    "/api/tasks": "tasks.get",
-    "/api/modules": "modules.get",
-    "/api/like": "like.get",
-    "/api/medals": "medals.get",
-    "/api/watch": "watch.get",
+    "tasks": "tasks.get",
+    "modules": "modules.get",
+    "like": "like.get",
+    "medals": "medals.get",
+    "watch": "watch.get",
 }
 PROXY_POST = {
-    "/api/tasks": "tasks.set",
-    "/api/modules": "modules.set",
-    "/api/like": "like.set",
-    "/api/medals": "medals.set",
-    "/api/medals/refresh": "medals.refresh",
+    "tasks": "tasks.set",
+    "modules": "modules.set",
+    "like": "like.set",
+    "medals": "medals.set",
+    "medals/refresh": "medals.refresh",
 }
 # 需要逐个探测直播间或分页拉取的操作，耗时与数据量成正比
 LONG_ACTIONS = {"like.get", "medals.refresh"}
@@ -571,10 +592,108 @@ class Supervisor:
             self.restart_lock.release()
 
 
+class Account:
+    """一个账号：独立的日志缓冲、控制通道与任务进程。
+
+    进程通过环境变量读写自己的数据目录与 cookie 文件，彼此完全隔离；
+    任一账号出错或重启都不影响其它账号。
+    """
+
+    def __init__(self, name: str, directory: Path, command: list[str], cwd: Path) -> None:
+        self.name = name
+        self.directory = directory
+        self.logs = LogBuffer()
+        self.control = ControlChannel()
+        self.supervisor = Supervisor(command, cwd, self.logs, self.control)
+        self.supervisor.set_env("BLTH_DATA_DIR", str(directory))
+        self.supervisor.set_env("BLTH_COOKIE_FILE", str(directory / "cookie.txt"))
+
+    def start(self) -> bool:
+        return self.supervisor.start()
+
+    def stop(self) -> None:
+        self.supervisor.stop()
+
+    def restart(self) -> bool:
+        return self.supervisor.try_restart()
+
+    def status(self) -> dict:
+        status = self.supervisor.status()
+        status["name"] = self.name
+        return status
+
+
+class AccountManager:
+    """扫描并管理 data/accounts/ 下的账号。"""
+
+    def __init__(self, node: str, script: Path) -> None:
+        self.command = [node, str(script)]
+        self.accounts: OrderedDict[str, Account] = OrderedDict()
+
+    def ensure_default(self) -> None:
+        """首次启动时把旧的根目录单账号复制成默认账号，原文件保留不删。
+
+        只有当账号目录还不存在任何账号、且旧根目录确有配置时才迁移，避免覆盖用户自建目录。
+        """
+        if not LEGACY_STORAGE.is_file():
+            return
+        if ACCOUNTS_ROOT.is_dir() and any(ACCOUNTS_ROOT.iterdir()):
+            return
+
+        target = ACCOUNTS_ROOT / DEFAULT_ACCOUNT
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LEGACY_STORAGE, target / "storage.json")
+        if LEGACY_COOKIE.is_file():
+            shutil.copy2(LEGACY_COOKIE, target / "cookie.txt")
+        else:
+            (target / "cookie.txt").write_text("", encoding="utf-8")
+        print_line(
+            "info",
+            "[Console]",
+            f"已把旧版单账号配置复制为默认账号：{target}（原文件保留）",
+        )
+
+    def scan(self) -> None:
+        """扫描账号目录，按名称建立账号；不启动进程，启动交给调用方统一处理。"""
+        self.accounts.clear()
+        if not ACCOUNTS_ROOT.is_dir():
+            return
+        for entry in sorted(ACCOUNTS_ROOT.iterdir(), key=lambda item: item.name):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            account = Account(entry.name, entry, self.command, ROOT)
+            self.accounts[entry.name] = account
+
+    def names(self) -> list[str]:
+        return list(self.accounts)
+
+    def get(self, name: str) -> Account | None:
+        return self.accounts.get(name)
+
+    def create(self, name: str, cookie: str = "") -> Account | None:
+        """新建账号目录并登记；进程由调用方决定何时启动。"""
+        if not valid_account_name(name) or name in self.accounts:
+            return None
+        directory = ACCOUNTS_ROOT / name
+        if directory.exists():
+            return None
+        directory.mkdir(parents=True)
+        (directory / "cookie.txt").write_text(cookie or "", encoding="utf-8")
+        account = Account(name, directory, self.command, ROOT)
+        self.accounts[name] = account
+        return account
+
+    def remove(self, name: str) -> bool:
+        """停掉账号进程并从清单移除；账号目录保留，便于找回 cookie 等数据。"""
+        account = self.accounts.pop(name, None)
+        if account is None:
+            return False
+        account.stop()
+        return True
+
+
 class Handler(BaseHTTPRequestHandler):
-    supervisor: Supervisor
-    logs: LogBuffer
-    control: ControlChannel
+    accounts: AccountManager
     web_page: Path
 
     def log_message(self, _format: str, *_args: object) -> None:
@@ -614,7 +733,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length)
 
-    def _proxy(self, action: str, body: bytes | None) -> None:
+    def _proxy(self, account: Account, action: str, body: bytes | None) -> None:
         payload: dict = {}
         if body is not None:
             try:
@@ -627,8 +746,38 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         timeout = 900.0 if action in LONG_ACTIONS else 30.0
-        status, data = self.control.request(action, payload, timeout)
+        status, data = account.control.request(action, payload, timeout)
         self._send_json(status, data)
+
+    @staticmethod
+    def _split_account_rest(path: str) -> tuple[str | None, str]:
+        """从 /api/accounts/<账号名>/<子路径> 拆出账号名与子路径。"""
+        if not path.startswith(ACCOUNT_PREFIX):
+            return None, ""
+        head, _, rest = path[len(ACCOUNT_PREFIX) :].partition("/")
+        return unquote(head), rest
+
+    def _parse_log_query(self, query: dict[str, list[str]]) -> dict:
+        def first(name: str, default: str = "") -> str:
+            values = query.get(name, [])
+            return values[0].strip() if values else default
+
+        try:
+            after = int(first("after", "0"))
+        except ValueError:
+            after = 0
+        try:
+            limit = int(first("limit", "0"))
+        except ValueError:
+            limit = 0
+        levels = {level.strip() for level in first("level").split(",") if level.strip()}
+        return {
+            "after": after,
+            "limit": limit,
+            "levels": levels or None,
+            "title": first("title"),
+            "keyword": first("keyword"),
+        }
 
     def _serve_page(self) -> None:
         if self.web_page.is_file():
@@ -678,63 +827,114 @@ class Handler(BaseHTTPRequestHandler):
             self._send(204, b"", "image/x-icon")
             return
 
-        if path == "/api/logs":
-            query = parse_qs(url.query)
-            try:
-                after = int(query.get("after", ["0"])[0])
-            except ValueError:
-                after = 0
-            try:
-                limit = int(query.get("limit", ["0"])[0])
-            except ValueError:
-                limit = 0
-            levels = {
-                level.strip()
-                for level in query.get("level", [""])[0].split(",")
-                if level.strip()
-            }
+        if path == "/api/accounts":
             self._send_json(
                 200,
-                self.logs.since(
-                    after,
-                    limit,
-                    levels=levels or None,
-                    title=query.get("title", [""])[0].strip(),
-                    keyword=query.get("keyword", [""])[0].strip(),
-                ),
+                {"accounts": [account.status() for account in self.accounts.accounts.values()]},
             )
-            return
-
-        if path == "/api/status":
-            self._send_json(200, self.supervisor.status())
             return
 
         if path == "/api/avatar":
             self._serve_avatar(parse_qs(url.query).get("url", [""])[0])
             return
 
-        if path in PROXY_GET:
-            self._proxy(PROXY_GET[path], None)
-            return
+        if path.startswith(ACCOUNT_PREFIX):
+            name, rest = self._split_account_rest(path)
+            account = self.accounts.get(name)
+            if account is None:
+                self._send_json(404, {"error": f"账号不存在：{name}"})
+                return
+
+            if rest == "status":
+                self._send_json(200, account.status())
+                return
+
+            if rest == "logs":
+                query = self._parse_log_query(parse_qs(url.query))
+                self._send_json(
+                    200,
+                    account.logs.since(
+                        query["after"],
+                        query["limit"],
+                        levels=query["levels"],
+                        title=query["title"],
+                        keyword=query["keyword"],
+                    ),
+                )
+                return
+
+            if rest in PROXY_GET:
+                self._proxy(account, PROXY_GET[rest], None)
+                return
 
         self._send_json(404, {"error": "Not Found"})
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
 
-        if path == "/api/restart":
-            if self.supervisor.try_restart():
-                self._send_json(202, {"accepted": True})
-            else:
-                self._send_json(409, {"error": "正在重新启动"})
-            return
-
-        if path in PROXY_POST:
+        if path == "/api/accounts":
             body = self._read_body()
             if body is None:
                 self._send_json(400, {"error": "请求体长度不合法"})
                 return
-            self._proxy(PROXY_POST[path], body)
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (ValueError, UnicodeDecodeError):
+                self._send_json(400, {"error": "请求体不是合法的 JSON"})
+                return
+            if not isinstance(payload, dict):
+                self._send_json(400, {"error": "请求体必须是 JSON 对象"})
+                return
+
+            name = payload.get("name")
+            if not isinstance(name, str) or not name.strip():
+                self._send_json(400, {"error": "缺少账号名"})
+                return
+            cookie = payload.get("cookie")
+            account = self.accounts.create(name.strip(), cookie if isinstance(cookie, str) else "")
+            if account is None:
+                self._send_json(400, {"error": "账号名非法或已存在，或目录已被占用"})
+                return
+            account.start()
+            self._send_json(201, account.status())
+            return
+
+        if path.startswith(ACCOUNT_PREFIX):
+            name, rest = self._split_account_rest(path)
+            account = self.accounts.get(name)
+            if account is None:
+                self._send_json(404, {"error": f"账号不存在：{name}"})
+                return
+
+            if rest == "restart":
+                if account.restart():
+                    self._send_json(202, {"accepted": True})
+                else:
+                    self._send_json(409, {"error": "正在重新启动"})
+                return
+
+            if rest in PROXY_POST:
+                body = self._read_body()
+                if body is None:
+                    self._send_json(400, {"error": "请求体长度不合法"})
+                    return
+                self._proxy(account, PROXY_POST[rest], body)
+                return
+
+        self._send_json(404, {"error": "Not Found"})
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+
+        if path.startswith(ACCOUNT_PREFIX):
+            name, rest = self._split_account_rest(path)
+            if rest != "":
+                self._send_json(404, {"error": "Not Found"})
+                return
+            if not self.accounts.remove(name):
+                self._send_json(404, {"error": f"账号不存在：{name}"})
+                return
+            self._send_json(200, {"removed": name})
             return
 
         self._send_json(404, {"error": "Not Found"})
@@ -778,14 +978,13 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    logs = LogBuffer()
-    control = ControlChannel()
-    supervisor = Supervisor([args.node, str(script)], ROOT, logs, control)
-    Handler.supervisor = supervisor
-    Handler.logs = logs
-    Handler.control = control
+    accounts = AccountManager(args.node, script)
+    accounts.ensure_default()
+    accounts.scan()
+    Handler.accounts = accounts
     Handler.web_page = web_page
-    supervisor.start()
+    for account in accounts.accounts.values():
+        account.start()
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     server.daemon_threads = True
@@ -796,7 +995,8 @@ def main() -> int:
         pass
     finally:
         server.server_close()
-        supervisor.stop()
+        for account in accounts.accounts.values():
+            account.stop()
     return 0
 
 

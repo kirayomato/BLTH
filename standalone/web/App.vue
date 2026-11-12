@@ -22,6 +22,146 @@ const tasks = ref<TaskView[]>([])
 const saving = ref(false)
 const error = ref('')
 
+/* ---------------- 账号 ---------------- */
+
+interface AccountView {
+  name: string
+  running: boolean
+  pid: number | null
+  startedAt: number | null
+  exitCode: number | null
+  control: boolean
+}
+
+const accounts = ref<AccountView[]>([])
+const currentAccount = ref('')
+const accountError = ref('')
+
+/** 当前账号作用域的接口地址 */
+function accountEndpoint(rest: string): string {
+  return `/api/accounts/${encodeURIComponent(currentAccount.value)}/${rest}`
+}
+
+async function loadAccounts(prefer?: string): Promise<void> {
+  try {
+    const response = await fetch('/api/accounts')
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const data = (await response.json()) as { accounts: AccountView[] }
+    accounts.value = data.accounts
+    if (!data.accounts.some((item) => item.name === currentAccount.value)) {
+      currentAccount.value = prefer ?? data.accounts[0]?.name ?? ''
+    }
+    accountError.value = ''
+  } catch (err) {
+    accountError.value = `读取账号列表失败：${(err as Error).message}`
+  }
+}
+
+/** 切换到指定账号：重置与该账号相关的缓存态，避免串号；force 用于账号已选中但尚未加载数据的首次激活 */
+async function selectAccount(name: string, force = false): Promise<void> {
+  if (!name || (!force && name === currentAccount.value)) {
+    return
+  }
+  currentAccount.value = name
+  logSession.value = ''
+  logLastSeq = 0
+  logRecords.value = []
+  medalLoaded.value = false
+  medalRows.value = []
+  medalListRoomids.value = []
+  medalPriorityRoomids.value = []
+  medalIsWhiteList.value = false
+  likeCandidates.value = []
+  likeSelection.value = []
+  liveWatchInfo.value = null
+  tasks.value = []
+  await Promise.all([load(), loadConfigJson()])
+  await fetchLogs(0)
+}
+
+function onAccountTabChange(name: string | number): void {
+  void selectAccount(String(name))
+}
+
+/* ---------------- 新增 / 删除账号 ---------------- */
+
+const addAccountVisible = ref(false)
+const addAccountName = ref('')
+const addAccountCookie = ref('')
+const addAccountSaving = ref(false)
+
+function openAddAccount(): void {
+  addAccountName.value = ''
+  addAccountCookie.value = ''
+  addAccountVisible.value = true
+}
+
+async function createAccount(): Promise<void> {
+  const name = addAccountName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入账号名')
+    return
+  }
+  addAccountSaving.value = true
+  try {
+    const response = await fetch('/api/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, cookie: addAccountCookie.value }),
+    })
+    const data = (await response.json()) as { error?: string }
+    if (!response.ok) {
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+    addAccountVisible.value = false
+    ElMessage.success(`已新增账号「${name}」并启动`)
+    await loadAccounts(name)
+    await selectAccount(name, true)
+  } catch (err) {
+    ElMessage.error(`新增账号失败：${(err as Error).message}`)
+  } finally {
+    addAccountSaving.value = false
+  }
+}
+
+async function removeCurrentAccount(): Promise<void> {
+  const name = currentAccount.value
+  if (!name) {
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `会停止账号「${name}」的任务进程并从列表移除；其 cookie 与配置目录（data/accounts/${name}/）保留在磁盘上，之后可再手动放回。`,
+      '删除账号',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const response = await fetch(`/api/accounts/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+    ElMessage.success(`已删除账号「${name}」`)
+    accounts.value = accounts.value.filter((item) => item.name !== name)
+    currentAccount.value = ''
+    const next = accounts.value[0]
+    if (next) {
+      await selectAccount(next.name)
+    } else {
+      tasks.value = []
+    }
+  } catch (err) {
+    ElMessage.error(`删除账号失败：${(err as Error).message}`)
+  }
+}
+
 const groups = computed(() => {
   const result: { name: string; tasks: TaskView[] }[] = []
 
@@ -47,7 +187,7 @@ function isDisabled(task: TaskView): boolean {
 
 async function load(): Promise<void> {
   try {
-    const response = await fetch('/api/tasks')
+    const response = await fetch(accountEndpoint('tasks'))
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
@@ -63,7 +203,7 @@ async function save(): Promise<void> {
   saving.value = true
 
   try {
-    const response = await fetch('/api/tasks', {
+    const response = await fetch(accountEndpoint('tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -169,7 +309,7 @@ function logQuery(after: number): string {
 
 async function fetchLogs(after: number): Promise<void> {
   const generation = logGeneration
-  const response = await fetch(`/api/logs?${logQuery(after)}`, { cache: 'no-store' })
+  const response = await fetch(`${accountEndpoint('logs')}?${logQuery(after)}`, { cache: 'no-store' })
   if (!response.ok || generation !== logGeneration) {
     return
   }
@@ -288,7 +428,7 @@ async function loadConfigJson(): Promise<void> {
   configJsonLoading.value = true
 
   try {
-    const response = await fetch('/api/modules', { cache: 'no-store' })
+    const response = await fetch(accountEndpoint('modules'), { cache: 'no-store' })
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
@@ -317,7 +457,7 @@ async function saveConfigJson(): Promise<void> {
   configJsonSaving.value = true
 
   try {
-    const response = await fetch('/api/modules', {
+    const response = await fetch(accountEndpoint('modules'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ json: configJson.value }),
@@ -374,7 +514,7 @@ const statusText = computed(() => {
 
 async function pollStatus(): Promise<void> {
   try {
-    const response = await fetch('/api/status', { cache: 'no-store' })
+    const response = await fetch(accountEndpoint('status'), { cache: 'no-store' })
     if (response.ok) {
       processStatus.value = (await response.json()) as ProcessStatus
     }
@@ -391,7 +531,7 @@ async function refreshAfterRestart(): Promise<void> {
     await new Promise((resolve) => window.setTimeout(resolve, 800))
 
     try {
-      const response = await fetch('/api/status', { cache: 'no-store' })
+      const response = await fetch(accountEndpoint('status'), { cache: 'no-store' })
       const status = (await response.json()) as ProcessStatus
       if (!status.running || !status.control) {
         continue
@@ -424,7 +564,7 @@ async function restartProgram(): Promise<void> {
   restarting.value = true
 
   try {
-    const response = await fetch('/api/restart', { method: 'POST' })
+    const response = await fetch(accountEndpoint('restart'), { method: 'POST' })
     if (!response.ok) {
       const data = (await response.json().catch(() => ({}))) as { error?: string }
       throw new Error(data.error ?? `HTTP ${response.status}`)
@@ -442,9 +582,11 @@ async function restartProgram(): Promise<void> {
   }
 }
 
-onMounted(() => {
-  load()
-  loadConfigJson()
+onMounted(async () => {
+  await loadAccounts()
+  if (currentAccount.value) {
+    await selectAccount(currentAccount.value, true)
+  }
   void pollLogs()
   void pollStatus()
   void pollWatch()
@@ -469,7 +611,7 @@ const watchPercent = computed(() => {
 })
 
 async function fetchWatch(): Promise<void> {
-  const response = await fetch('/api/watch', { cache: 'no-store' })
+  const response = await fetch(accountEndpoint('watch'), { cache: 'no-store' })
   if (response.ok) {
     const info = (await response.json()) as Partial<LiveWatchInfo> | null
     // 空闲时控制通道把 null 折叠成空对象，按字段判定而不是按真值
@@ -608,7 +750,7 @@ async function saveMedals(mode: 'list' | 'priority' = medalMode.value): Promise<
 
   try {
     const roomids = mode === 'priority' ? medalPriorityRoomids.value : medalListRoomids.value
-    const response = await fetch('/api/medals', {
+    const response = await fetch(accountEndpoint('medals'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -652,7 +794,7 @@ async function loadMedals(): Promise<void> {
   medalLoading.value = true
 
   try {
-    const response = await fetch('/api/medals', { cache: 'no-store' })
+    const response = await fetch(accountEndpoint('medals'), { cache: 'no-store' })
     const data = (await response.json()) as Partial<MedalListSnapshot> & { error?: string }
 
     if (!response.ok) {
@@ -686,7 +828,7 @@ async function refreshMedals(): Promise<void> {
 
   medalRefreshing.value = true
   try {
-    const response = await fetch('/api/medals/refresh', { method: 'POST' })
+    const response = await fetch(accountEndpoint('medals/refresh'), { method: 'POST' })
     const data = (await response.json()) as { error?: string }
     if (!response.ok) {
       throw new Error(data.error ?? `HTTP ${response.status}`)
@@ -867,7 +1009,7 @@ async function loadLikeCandidates(): Promise<void> {
   likeSelection.value = []
 
   try {
-    const response = await fetch('/api/like')
+    const response = await fetch(accountEndpoint('like'))
     const data = (await response.json()) as Partial<LikeCandidateSnapshot> & { error?: string }
 
     if (!response.ok) {
@@ -990,7 +1132,7 @@ async function runLike(): Promise<void> {
   }
 
   try {
-    const response = await fetch('/api/like', {
+    const response = await fetch(accountEndpoint('like'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomids: likeSelection.value.map((row) => row.roomid) }),
@@ -1012,6 +1154,31 @@ async function runLike(): Promise<void> {
 
 <template>
   <div class="page">
+    <el-alert v-if="accountError" :title="accountError" type="error" :closable="false" show-icon />
+
+    <div class="account-bar">
+      <el-tabs v-model="currentAccount" @tab-change="onAccountTabChange" class="account-tabs">
+        <el-tab-pane
+          v-for="account in accounts"
+          :key="account.name"
+          :label="account.name"
+          :name="account.name"
+        />
+      </el-tabs>
+      <div class="account-actions">
+        <el-button size="small" @click="openAddAccount">新增账号</el-button>
+        <el-button
+          size="small"
+          type="danger"
+          plain
+          :disabled="!currentAccount"
+          @click="removeCurrentAccount"
+        >
+          删除当前
+        </el-button>
+      </div>
+    </div>
+
     <header class="header">
       <div class="header-text">
         <h1>BLTH 配置</h1>
@@ -1021,7 +1188,7 @@ async function runLike(): Promise<void> {
         </p>
       </div>
       <el-button type="danger" plain :loading="restarting" @click="restartProgram">
-        重新启动任务
+        重新启动该账号
       </el-button>
     </header>
 
@@ -1496,7 +1663,34 @@ async function runLike(): Promise<void> {
       </div>
     </el-card>
 
-    <p class="footer">开关变更会立即写入配置；重新打开的任务会马上运行一次，今天已完成的任务只会重新排期，不会重复执行。配置由任务进程落盘，重启后会重新读取。</p>
+    <p class="footer">开关变更会立即写入配置；重新打开的任务会马上运行一次，今天已完成的任务只会重新排期，不会重复执行。配置由任务进程落盘，重启后会重新读取。每个账号有独立的 cookie 与数据目录（data/accounts/&lt;账号名&gt;/），可单独重启、互不影响。</p>
+
+    <el-dialog v-model="addAccountVisible" title="新增账号" width="480px" :lock-scroll="false">
+      <p class="hint">
+        账号数据存放在 data/accounts/&lt;账号名&gt;/（含 cookie.txt 与 storage.json）。cookie
+        留空时任务进程会提示未登录，可稍后把 cookie 粘贴到该目录的 cookie.txt 中再重启。
+      </p>
+      <el-form label-width="70px" style="margin-top: 12px">
+        <el-form-item label="账号名">
+          <el-input v-model="addAccountName" placeholder="如：小号A" clearable />
+        </el-form-item>
+        <el-form-item label="Cookie">
+          <el-input
+            v-model="addAccountCookie"
+            type="textarea"
+            :rows="6"
+            spellcheck="false"
+            placeholder="可选：粘贴该账号的 cookie 文本；留空则需自行写入 cookie 文件"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="addAccountVisible = false">取消</el-button>
+        <el-button type="primary" :loading="addAccountSaving" @click="createAccount">
+          新增并启动
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1505,6 +1699,29 @@ async function runLike(): Promise<void> {
   max-width: 960px;
   margin: 0 auto;
   padding: 28px 16px 48px;
+}
+
+.account-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.account-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-tabs :deep(.el-tabs__header) {
+  margin-bottom: 8px;
+}
+
+.account-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
 }
 
 .header {

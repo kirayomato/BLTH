@@ -25,16 +25,45 @@
 <h1>BLTH 控制台</h1>
 <div class="sub">找不到 dist-web/index.html，当前是精简页。执行 <code>npm run build-web</code> 后刷新即可使用完整配置页面。</div>
 <div class="card"><div class="row">
+  <label for="acc">账号</label>
+  <select id="acc"></select>
   <span id="status" class="status">连接中…</span>
-  <button id="restart">重新启动任务进程</button>
+  <button id="restart">重新启动该账号</button>
+  <button id="refresh-acc">刷新账号列表</button>
 </div></div>
 <div id="logs"></div>
 <script>
-let lastSeq = 0, session = '';
+let lastSeq = 0, session = '', current = '';
 const view = document.getElementById('logs');
+const accSel = document.getElementById('acc');
+function api(sub) { return '/api/accounts/' + encodeURIComponent(current) + '/' + sub; }
+async function loadAccounts(prefer) {
+  try {
+    const data = await (await fetch('/api/accounts', { cache: 'no-store' })).json();
+    const list = data.accounts || [];
+    const prev = accSel.value || prefer || (list[0] && list[0].name);
+    accSel.innerHTML = '';
+    for (const a of list) {
+      const opt = document.createElement('option');
+      opt.value = a.name; opt.textContent = a.name + (a.running ? '（运行中）' : '（已停止）');
+      accSel.appendChild(opt);
+    }
+    if (list.some((a) => a.name === prev)) accSel.value = prev;
+    switchAccount(true);
+  } catch (e) { document.getElementById('status').textContent = '控制台不可用'; }
+}
+function switchAccount(force) {
+  if (current === accSel.value && !force) return;
+  current = accSel.value || '';
+  session = ''; lastSeq = 0; view.innerHTML = '';
+  pollStatus();
+  pollLogs();
+}
+accSel.onchange = () => switchAccount(false);
+document.getElementById('refresh-acc').onclick = () => loadAccounts(current);
 async function pollLogs() {
   try {
-    const r = await fetch('/api/logs?after=' + lastSeq, { cache: 'no-store' });
+    const r = await fetch(api('logs') + '?after=' + lastSeq, { cache: 'no-store' });
     if (!r.ok) return;
     const data = await r.json();
     if (data.session !== session) { session = data.session; view.innerHTML = ''; lastSeq = 0; }
@@ -52,19 +81,21 @@ async function pollLogs() {
   setTimeout(pollLogs, 1000);
 }
 async function pollStatus() {
+  if (!current) return;
   try {
-    const data = await (await fetch('/api/status', { cache: 'no-store' })).json();
+    const data = await (await fetch(api('status'), { cache: 'no-store' })).json();
     document.getElementById('status').textContent = data.running
       ? '运行中 · PID ' + data.pid : '已停止 · 退出码 ' + data.exitCode;
   } catch (e) { document.getElementById('status').textContent = '控制台不可用'; }
   setTimeout(pollStatus, 2000);
 }
 document.getElementById('restart').onclick = async () => {
-  if (!confirm('停止当前任务进程并重新启动：重新读取配置与 cookie，全部任务重新运行。')) return;
-  const r = await fetch('/api/restart', { method: 'POST' });
+  if (!current) return;
+  if (!confirm('停止该账号的任务进程并重新启动：重新读取配置与 cookie，全部任务重新运行。')) return;
+  const r = await fetch(api('restart'), { method: 'POST' });
   if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || ('HTTP ' + r.status)); }
 };
-pollLogs(); pollStatus();
+loadAccounts('');
 </script>
 </body>
 </html>
