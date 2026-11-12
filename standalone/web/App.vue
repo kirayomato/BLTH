@@ -1121,7 +1121,15 @@ watch(filteredLikeCandidates, () => nextTick(syncLikeSelection))
 function handleLikeRowClick(row: LikeRoomCandidate, _column: unknown, event: Event): void {
   const target = event.target as HTMLElement | null
   if (target?.closest('.el-checkbox, a, button')) return
-  likeTableRef.value?.toggleRowSelection(row)
+
+  // 勾选状态以 likeSelection 为准，同时显式切换表格行，不依赖 select 事件回流
+  const selected = likeSelection.value.some((item) => item.roomid === row.roomid)
+  if (selected) {
+    likeSelection.value = likeSelection.value.filter((item) => item.roomid !== row.roomid)
+  } else {
+    likeSelection.value = [...likeSelection.value, row]
+  }
+  likeTableRef.value?.toggleRowSelection(row, !selected)
 }
 
 /** 提交选中的直播间，服务端在后台逐个点赞 */
