@@ -221,7 +221,7 @@ class LogBuffer:
         self.next_seq = 1
         self.session = uuid.uuid4().hex[:8]
 
-    def append(self, level: str, line: str, title: str | None = None) -> None:
+    def append(self, level: str, line: str, title: str | None = None) -> dict:
         match = LOGGER_PREFIX.match(line)
         if title is None:
             title = match.group(1) if match else ""
@@ -229,19 +229,32 @@ class LogBuffer:
         now = int(time.time() * 1000)
 
         with self.lock:
-            self.records.append(
-                {
-                    "seq": self.next_seq,
-                    "time": now,
-                    "level": level,
-                    "title": title,
-                    "text": text,
-                }
-            )
+            record = {
+                "seq": self.next_seq,
+                "time": now,
+                "level": level,
+                "title": title,
+                "text": text,
+            }
+            self.records.append(record)
             self._trim(now)
             self.next_seq += 1
 
         print_line(level, title, text)
+        return record
+
+    def extend(self, record: dict, line: str) -> bool:
+        """把多行输出的续行并回起始记录。
+
+        一条 console 调用可能打出多行（对象展开、错误栈），等级标记只落在首行；
+        续行并进同一条记录，等级、模块、关键词才能对整块生效。记录已被淘汰时
+        返回 False，调用方按普通行另行入库。
+        """
+        with self.lock:
+            if not self.records or record["seq"] < self.records[0]["seq"]:
+                return False
+            record["text"] = f'{record["text"]}\n{line.rstrip()}'
+            return True
 
     def _trim(self, now: int) -> None:
         """丢弃旧记录；调用方必须持有 self.lock。
@@ -502,6 +515,8 @@ class Supervisor:
         return True
 
     def _reader(self, stream, stream_level: str) -> None:
+        # 等级标记只落在多行输出的首行，续行靠 record 定位并回同一条记录
+        record = None
         try:
             for line in stream:
                 line = line.rstrip("\r\n")
@@ -509,12 +524,18 @@ class Supervisor:
                     continue
                 if stream_level == "info" and self.control.on_line(line):
                     continue
-                level = "info"
+
                 marked = LEVEL_MARK.match(line)
                 if marked:
-                    level = marked.group(1)
-                    line = line[marked.end() :]
-                elif stream_level == "stderr":
+                    record = self.logs.append(marked.group(1), line[marked.end() :])
+                    continue
+
+                if record is not None and self.logs.extend(record, line):
+                    print_line("info", "", line)
+                    continue
+
+                level = "info"
+                if stream_level == "stderr":
                     level = (
                         "error" if any(hint in line for hint in ERROR_HINTS) else "warn"
                     )
