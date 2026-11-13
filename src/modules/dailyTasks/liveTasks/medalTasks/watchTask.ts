@@ -328,11 +328,10 @@ class WatchTask extends MedalModule {
       const urlObj = new URL(url)
       const area_id = Number(urlObj.searchParams.get('area_id'))
       const parent_area_id = Number(urlObj.searchParams.get('parent_area_id'))
-
+      this.logger.debug("BAPI.live.urlObj:", urlObj)
       if (area_id > 0 && parent_area_id > 0) {
         this.logger.log(
-          `已从直播间链接中（roomid = ${roomid}）获取到分区数据（area_id = ${area_id}，parent_area_id = ${parent_area_id}）`,
-          urlObj,
+          `已从直播间链接中（roomid = ${roomid}）获取到分区数据（area_id = ${area_id}，parent_area_id = ${parent_area_id}）`
         )
         return [area_id, parent_area_id]
       }
