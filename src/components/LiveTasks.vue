@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useModuleStore, useBiliStore, useUIStore } from '@/stores'
-import { Check, Edit, Delete, Rank, Refresh, Search, Star } from '@element-plus/icons-vue'
+import { Check, Edit, Delete, Rank, Search, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import helpInfo from '@/library/help-info'
 import { VueDraggable } from 'vue-draggable-plus'
@@ -442,26 +442,6 @@ const handleEditList = () => openMedalPanel('list')
 /** 编辑优先名单 */
 const handleEditPriorityList = () => openMedalPanel('priority')
 
-/** 重新获取粉丝勋章：忽略当日完成标记，强制从接口重拉，成功后按最新列表补全名单勾选 */
-const handleRefreshMedals = async () => {
-  if (biliStore.fansMedalsStatus === 'loading') {
-    ElMessage.info('正在获取粉丝勋章，请稍候')
-    return
-  }
-
-  medalInfoLoading.value = true
-  try {
-    await moduleStore.rerunModule('Default_FansMedals', true)
-    ElMessage.success(`已获取 ${biliStore.filteredFansMedals.length} 个粉丝勋章`)
-    await nextTick()
-    initSelection()
-  } catch (error) {
-    ElMessage.error(`获取粉丝勋章失败：${(error as Error).message}`)
-  } finally {
-    medalInfoLoading.value = false
-  }
-}
-
 function handleSelect(selection: MedalRow[]) {
   const visibleIds = new Set(filteredMedalRows.value.map((row) => row.roomid))
   const selectedIds = new Set(selection.map((row) => row.roomid))
@@ -742,13 +722,6 @@ watch(
           >优先名单
         </el-button>
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.priority" />
-        <el-button
-          size="small"
-          :icon="Refresh"
-          :loading="medalInfoLoading || biliStore.fansMedalsStatus === 'loading'"
-          @click="handleRefreshMedals"
-          >重新获取
-        </el-button>
       </el-space>
     </el-row>
     <el-divider />

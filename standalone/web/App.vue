@@ -663,7 +663,6 @@ const medalPriorityRoomids = ref<number[]>([])
 const medalStatus = ref('')
 const medalLoading = ref(false)
 const medalSaving = ref(false)
-const medalRefreshing = ref(false)
 /** 卡片默认收起：名单数据量较大，展开时才向后端取一次 */
 const medalExpanded = ref(false)
 /** 是否已成功取过名单，收起后再次展开不必重取 */
@@ -815,33 +814,6 @@ async function loadMedals(): Promise<void> {
     ElMessage.error(`读取粉丝勋章失败：${(err as Error).message}`)
   } finally {
     medalLoading.value = false
-  }
-}
-
-/**
- * 从接口重新拉取粉丝勋章
- *
- * 拉取由任务进程执行，完成后重新读取名单，让表格、勾选与获取状态一起更新。
- */
-async function refreshMedals(): Promise<void> {
-  if (medalRefreshing.value) return
-
-  medalRefreshing.value = true
-  try {
-    const response = await fetch(accountEndpoint('medals/refresh'), { method: 'POST' })
-    const data = (await response.json()) as { error?: string }
-    if (!response.ok) {
-      throw new Error(data.error ?? `HTTP ${response.status}`)
-    }
-
-    await loadMedals()
-    ElMessage.success('已重新获取粉丝勋章')
-  } catch (err) {
-    ElMessage.error(`重新获取粉丝勋章失败：${(err as Error).message}`)
-    // 失败时状态可能已变为 error，重新读取让页面与任务进程一致
-    await loadMedals()
-  } finally {
-    medalRefreshing.value = false
   }
 }
 
@@ -1292,9 +1264,6 @@ async function runLike(): Promise<void> {
           </button>
           <div class="card-actions">
             <span v-if="medalSaving" class="task-hint">保存中…</span>
-            <el-button size="small" :loading="medalRefreshing" @click="refreshMedals"
-              >重新获取
-            </el-button>
           </div>
         </div>
       </template>
