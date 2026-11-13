@@ -111,7 +111,7 @@ const TASK_ENTRIES: TaskEntry[] = [
     moduleName: 'DailyTask_LiveTask_WatchTask',
     group: '直播任务',
     label: '自动分配时长',
-    hint: '按到 24:00 的剩余时间均摊给本次要观看的直播间；关闭后每个直播间都看满 storage.json 中设置的时长',
+    hint: '按到 24:00 的剩余时间均摊给本次要观看的直播间；关闭后每个直播间都看满上方设置的时长',
     sub: true,
     parent: 'DailyTasks.LiveTasks.medalTasks.watch',
     param: true,
@@ -133,6 +133,40 @@ const TASK_ENTRIES: TaskEntry[] = [
     moduleName: 'DailyTask_OtherTask_GetYearVipPrivilegeTask',
     group: '其它任务',
     label: '领取年度大会员权益',
+  },
+]
+
+interface ParamEntry {
+  /** 指向 moduleConfig 中承载参数值的对象，顺序即配置层级 */
+  path: string[]
+  /** 参数在上述对象上的字段名 */
+  field: string
+  group: string
+  label: string
+  /** 数值单位，展示在输入框右侧 */
+  unit: string
+  min: number
+  max: number
+  /** 展示在输入框后的补充说明，可为空 */
+  hint?: string
+}
+
+/**
+ * 配置页面暴露的数值参数。
+ *
+ * 只放需要经常改、且一眼能看懂含义的几个（目前是观看时长），其余参数仍走「配置 JSON」。
+ * 这些参数只影响模块下次运行时的取值，改完不必重跑一轮。
+ */
+const PARAM_ENTRIES: ParamEntry[] = [
+  {
+    path: ['DailyTasks', 'LiveTasks', 'medalTasks', 'watch'],
+    field: 'time',
+    group: '直播任务',
+    label: '观看时长',
+    unit: '分钟 / 直播间',
+    min: 5,
+    max: 180,
+    hint: '关闭【自动分配时长】时按此看满；开启时作为单个直播间的上限。实际按 15 分钟的倍数向上取整',
   },
 ]
 
@@ -215,6 +249,69 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
 
   cancelScheduled(newlyDisabled)
   runNewlyEnabled(newlyEnabled)
+}
+
+/** 配置对象中承载参数值的那个节点 */
+function paramTarget(entry: ParamEntry): Record<string, any> | undefined {
+  let node: any = useModuleStore().moduleConfig
+
+  for (const key of entry.path) {
+    node = node?.[key]
+    if (node == null) {
+      return undefined
+    }
+  }
+
+  return node
+}
+
+function paramId(entry: ParamEntry): string {
+  return [...entry.path, entry.field].join('.')
+}
+
+function listParams(): unknown[] {
+  return PARAM_ENTRIES.map((entry) => ({
+    id: paramId(entry),
+    group: entry.group,
+    label: entry.label,
+    value: Number(paramTarget(entry)?.[entry.field] ?? entry.min),
+    unit: entry.unit,
+    min: entry.min,
+    max: entry.max,
+    hint: entry.hint,
+    /** 参数挂在哪一行开关下面：配置节点对应的开关 id */
+    after: entry.path.join('.'),
+  }))
+}
+
+/**
+ * 应用数值参数变更。
+ *
+ * 与开关一样就地改属性，模块持有的配置引用继续有效；越界或非整数一律拒绝，
+ * 避免写进 storage.json 后任务按错误时长跑一整轮。
+ */
+function applyParams(updates: { id?: string; value?: unknown }[]): ControlReply {
+  for (const update of updates) {
+    const entry = PARAM_ENTRIES.find((item) => paramId(item) === update.id)
+    if (!entry) {
+      continue
+    }
+
+    const value = Number(update.value)
+    if (!Number.isInteger(value) || value < entry.min || value > entry.max) {
+      return fail(400, `${entry.label}须为 ${entry.min}~${entry.max} 之间的整数`)
+    }
+
+    const target = paramTarget(entry)
+    if (!target || target[entry.field] === value) {
+      continue
+    }
+
+    target[entry.field] = value
+    logger.log(`【${entry.label}】已更新为 ${value} ${entry.unit}`)
+  }
+
+  return ok({ params: listParams() })
 }
 
 /**
@@ -574,6 +671,12 @@ async function dispatch(action: string, payload: Record<string, any>): Promise<C
         return fail(400, messageOf(error))
       }
     }
+
+    case 'params.get':
+      return ok({ params: listParams() })
+
+    case 'params.set':
+      return applyParams(Array.isArray(payload.params) ? payload.params : [])
 
     case 'like.get':
       return collectLikes()

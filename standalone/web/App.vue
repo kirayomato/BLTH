@@ -18,8 +18,26 @@ interface TaskView {
   parent?: string
 }
 
+/** 数值参数（如观看时长）：与开关不同的常用设置，直接以输入框呈现 */
+interface ParamView {
+  id: string
+  group: string
+  label: string
+  value: number
+  unit: string
+  min: number
+  max: number
+  hint?: string
+  /** 挂在哪一行开关下面：值为该开关的 id，渲染时紧跟其后 */
+  after: string
+}
+
 const tasks = ref<TaskView[]>([])
+const params = ref<ParamView[]>([])
 const saving = ref(false)
+const paramSaving = ref(false)
+/** 参数保存的防抖定时器 */
+let paramSaveTimer: number | undefined
 const error = ref('')
 
 /* ---------------- 账号 ---------------- */
@@ -64,6 +82,8 @@ async function selectAccount(name: string, force = false): Promise<void> {
   if (!name || (!force && name === currentAccount.value)) {
     return
   }
+  // 切换账号时丢掉尚未提交的参数改动，避免把旧账号的数值写给新账号
+  window.clearTimeout(paramSaveTimer)
   currentAccount.value = name
   logSession.value = ''
   logLastSeq = 0
@@ -77,6 +97,7 @@ async function selectAccount(name: string, force = false): Promise<void> {
   likeSelection.value = []
   liveWatchInfo.value = null
   tasks.value = []
+  params.value = []
   await Promise.all([load(), loadConfigJson()])
   await fetchLogs(0)
 }
@@ -156,6 +177,7 @@ async function removeCurrentAccount(): Promise<void> {
       await selectAccount(next.name)
     } else {
       tasks.value = []
+      params.value = []
     }
   } catch (err) {
     ElMessage.error(`删除账号失败：${(err as Error).message}`)
@@ -185,17 +207,88 @@ function isDisabled(task: TaskView): boolean {
   return !tasks.value.some((item) => item.id === task.parent && item.enabled)
 }
 
+/** 挂在指定开关后面的参数：每个参数紧跟它所属的那行开关，读起来才不脱节 */
+function paramsAfter(group: string, taskId: string): ParamView[] {
+  return params.value.filter((param) => param.group === group && param.after === taskId)
+}
+
 async function load(): Promise<void> {
   try {
-    const response = await fetch(accountEndpoint('tasks'))
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
+    const [taskResponse, paramResponse] = await Promise.all([
+      fetch(accountEndpoint('tasks')),
+      fetch(accountEndpoint('params')),
+    ])
+    if (!taskResponse.ok) {
+      throw new Error(`HTTP ${taskResponse.status}`)
     }
-    const data = (await response.json()) as { tasks: TaskView[] }
-    tasks.value = data.tasks
+    if (!paramResponse.ok) {
+      throw new Error(`HTTP ${paramResponse.status}`)
+    }
+
+    const taskData = (await taskResponse.json()) as { tasks: TaskView[] }
+    const paramData = (await paramResponse.json()) as { params: ParamView[] }
+    tasks.value = taskData.tasks
+    params.value = paramData.params
     error.value = ''
   } catch (err) {
     error.value = `读取配置失败：${(err as Error).message}`
+  }
+}
+
+/** 单独重读参数：保存失败时用来把输入框恢复成任务进程里的实际值 */
+async function loadParams(): Promise<void> {
+  try {
+    const response = await fetch(accountEndpoint('params'))
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const data = (await response.json()) as { params: ParamView[] }
+    params.value = data.params
+  } catch (err) {
+    ElMessage.error(`读取参数失败：${(err as Error).message}`)
+  }
+}
+
+/** 参数改动后的落盘延迟：连续按方向键或用上下箭头时不该每一下都发一次请求 */
+const PARAM_SAVE_DELAY = 400
+
+function scheduleParamSave(): void {
+  window.clearTimeout(paramSaveTimer)
+  paramSaveTimer = window.setTimeout(() => void saveParams(), PARAM_SAVE_DELAY)
+}
+
+async function saveParams(): Promise<void> {
+  if (paramSaving.value) {
+    // 上一笔还没回来：等它结束再提交，避免并发写同一个参数
+    scheduleParamSave()
+    return
+  }
+
+  paramSaving.value = true
+
+  try {
+    const response = await fetch(accountEndpoint('params'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        params: params.value.map((param) => ({ id: param.id, value: param.value })),
+      }),
+    })
+    const data = (await response.json()) as { params?: ParamView[]; error?: string }
+
+    if (!response.ok) {
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+
+    if (data.params) {
+      params.value = data.params
+    }
+    ElMessage.success('已保存')
+  } catch (err) {
+    ElMessage.error(`保存失败：${(err as Error).message}`)
+    await loadParams()
+  } finally {
+    paramSaving.value = false
   }
 }
 
@@ -597,6 +690,7 @@ onUnmounted(() => {
   window.clearTimeout(logReloadTimer)
   window.clearTimeout(statusTimer)
   window.clearTimeout(watchTimer)
+  window.clearTimeout(paramSaveTimer)
 })
 
 /* ---------------- 观看直播进度 ---------------- */
@@ -1162,7 +1256,7 @@ async function runLike(): Promise<void> {
     <header class="header">
       <div class="header-text">
         <h1>BLTH 配置</h1>
-        <p class="hint">此处可调整任务开关与少量开关型参数；其余任务参数（投币数量、观看时长、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；需要停止全部任务并按新配置从头重跑时，点右上角【重新启动任务】</p>
+        <p class="hint">此处可调整任务开关、观看时长与少量开关型参数；其余任务参数（投币数量、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；需要停止全部任务并按新配置从头重跑时，点右上角【重新启动任务】</p>
         <p class="hint process-status" :class="{ stopped: processStatus && !processStatus.running }">
           {{ statusText }}
         </p>
@@ -1592,21 +1686,40 @@ async function runLike(): Promise<void> {
         <span class="group-name">{{ group.name }}</span>
       </template>
 
-      <div
-        v-for="task in group.tasks"
-        :key="task.id"
-        class="row"
-        :class="{ sub: task.sub }"
-      >
-        <el-switch
-          v-model="task.enabled"
-          :loading="saving"
-          :disabled="isDisabled(task)"
-          @change="save"
-        />
-        <span class="label">{{ task.label }}</span>
-        <span v-if="task.hint" class="task-hint">{{ task.hint }}</span>
-      </div>
+      <template v-for="task in group.tasks" :key="task.id">
+        <div class="row" :class="{ sub: task.sub }">
+          <el-switch
+            v-model="task.enabled"
+            :loading="saving"
+            :disabled="isDisabled(task)"
+            @change="save"
+          />
+          <span class="label">{{ task.label }}</span>
+          <span v-if="task.hint" class="task-hint">{{ task.hint }}</span>
+        </div>
+
+        <div
+          v-for="param in paramsAfter(group.name, task.id)"
+          :key="param.id"
+          class="row param-row"
+        >
+          <span class="label">{{ param.label }}</span>
+          <el-input-number
+            v-model="param.value"
+            size="small"
+            class="param-input"
+            :min="param.min"
+            :max="param.max"
+            :precision="0"
+            :controls="false"
+            :value-on-clear="param.min"
+            @change="scheduleParamSave"
+          />
+          <span class="param-unit">{{ param.unit }}</span>
+          <span v-if="paramSaving" class="task-hint">保存中…</span>
+          <span v-if="param.hint" class="task-hint">{{ param.hint }}</span>
+        </div>
+      </template>
     </el-card>
 
     <el-card shadow="never" class="card">
@@ -1785,6 +1898,19 @@ async function runLike(): Promise<void> {
 
 .row.sub {
   padding-left: 28px;
+}
+
+/* 数值参数没有开关，缩进到子项所在列，视觉上归属上方的任务 */
+.param-row {
+  padding-left: 28px;
+}
+
+.param-input {
+  width: 92px;
+}
+
+.param-unit {
+  font-size: 13px;
 }
 
 .task-hint {

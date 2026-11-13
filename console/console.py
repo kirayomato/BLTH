@@ -79,6 +79,7 @@ ERROR_HINTS = ("出错", "失败", "错误", "error", "Error")
 PROXY_GET = {
     "tasks": "tasks.get",
     "modules": "modules.get",
+    "params": "params.get",
     "like": "like.get",
     "medals": "medals.get",
     "watch": "watch.get",
@@ -86,6 +87,7 @@ PROXY_GET = {
 PROXY_POST = {
     "tasks": "tasks.set",
     "modules": "modules.set",
+    "params": "params.set",
     "like": "like.set",
     "medals": "medals.set",
 }

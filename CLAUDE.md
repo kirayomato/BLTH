@@ -37,13 +37,13 @@ node dist-standalone/blth-standalone.mjs               # 只跑任务进程，�
 BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs  # 仅检查登录态，发一次请求后退出
 ```
 
-控制台只监听回环地址（`http://127.0.0.1:8787`），提供完整配置页面：任务开关、配置 JSON、
-粉丝勋章名单、运行日志（按等级、模块、关键词筛选）、手动点赞与【重新启动任务】按钮。
+控制台只监听回环地址（`http://127.0.0.1:8787`），提供完整配置页面：任务开关、观看时长、
+配置 JSON、粉丝勋章名单、运行日志（按等级、模块、关键词筛选）、手动点赞与【重新启动任务】按钮。
 页面来自 `dist-web/index.html`（`build-web` 产物）；文件缺失时改发 `console/fallback.html`
 精简页，仍能看日志和重启。任务进程本身不监听端口。
 
-需要碰到任务进程内状态的接口（`/api/tasks`、`/api/modules`、`/api/medals`、`/api/like`）
-由控制台经 **stdin/stdout 单行 JSON 控制通道** 转发给子进程：控制台从 stdin 写请求，
+需要碰到任务进程内状态的接口（`/api/tasks`、`/api/modules`、`/api/params`、`/api/medals`、
+`/api/like`）由控制台经 **stdin/stdout 单行 JSON 控制通道** 转发给子进程：控制台从 stdin 写请求，
 任务进程把响应写成 stdout 上带 `\u001eBLTHCTL` 前缀的单行 JSON，其余行按普通日志处理。
 控制台按请求 id 匹配挂起请求，重启时会把挂起请求立刻作废，避免旧进程的响应串到新进程。
 `/api/status`、`/api/logs`、`/api/restart`、`/api/avatar` 与静态页由控制台自己处理。
