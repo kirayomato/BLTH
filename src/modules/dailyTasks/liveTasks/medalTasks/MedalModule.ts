@@ -141,6 +141,8 @@ class MedalModule extends BaseModule {
         const medals = [...response.data.special_list, ...response.data.list]
         const observedAt = tsm()
 
+        this.syncFansMedalPage(medals)
+
         for (const medal of medals) {
           const medalRoomid = medal.room_info.room_id
           const medalLiveStatus = medal.room_info.living_status
@@ -169,6 +171,42 @@ class MedalModule extends BaseModule {
       this.logger.warn(`BAPI.live.fansMedalPanel(${page}) 出错`, error)
     }
     return { status: null, canTryNextPage: false }
+  }
+
+  /**
+   * 用一页粉丝勋章面板数据刷新勋章快照
+   *
+   * 保持 fansMedals 中已有对象的引用，运行中的任务需要通过旧引用读到最新数据；
+   * 只刷新已存在的勋章，列表长度和分页位置仍由启动时的快照决定。
+   * is_lighted 由 GetActivatedMedalInfo 独占维护，面板列表可能滞后，不能覆盖它。
+   */
+  private syncFansMedalPage(medals: LiveData.FansMedalPanel.List[]): void {
+    const fansMedals = useBiliStore().fansMedals
+    if (!fansMedals) {
+      return
+    }
+    const storedByRoomid = new Map(fansMedals.map((m) => [m.room_info.room_id, m]))
+    for (const fresh of _.uniqBy(medals, (m) => m.room_info.room_id)) {
+      const stored = storedByRoomid.get(fresh.room_info.room_id)
+      if (stored) {
+        const isLighted = stored.medal.is_lighted
+        Object.assign(stored, fresh)
+        stored.medal.is_lighted = isLighted
+      }
+    }
+  }
+
+  /**
+   * 把直播状态写回勋章快照
+   *
+   * getMedals() 按 room_info.living_status 划分直播中/已下播，
+   * 两种探测途径都要更新它，分组才不取决于最后一次走的是哪个接口。
+   */
+  private syncRoomLivingStatus(roomid: number, liveStatus: number): void {
+    const medal = useBiliStore().fansMedals?.find((m) => m.room_info.room_id === roomid)
+    if (medal) {
+      medal.room_info.living_status = liveStatus
+    }
   }
 
   /**
@@ -211,6 +249,7 @@ class MedalModule extends BaseModule {
         if (response.code === 0) {
           const liveStatus = response.data.room_info.live_status
           MedalModule.liveStatusSnapshots.set(roomid, { liveStatus, observedAt: tsm() })
+          this.syncRoomLivingStatus(roomid, liveStatus)
           return liveStatus
         }
         this.logger.warn(`BAPI.live.getInfoByRoom(${roomid}) 失败`, response.message)
