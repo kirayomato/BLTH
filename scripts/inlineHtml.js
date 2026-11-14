@@ -22,14 +22,20 @@ export function inlineHtmlPlugin() {
 
       for (const [fileName, file] of Object.entries(bundle)) {
         if (file.type === 'chunk' && fileName.endsWith('.js')) {
-          const pattern = new RegExp(`<script[^>]*src="[^"]*${escapeRegExp(fileName)}"[^>]*></script>`)
+          // (?![a-z]+:) 排除 https:// 等绝对 URL：CDN 资源必须保留为外链，
+          // 否则会被下面的 fileName 后缀匹配误当成构建产物内联。
+          const pattern = new RegExp(
+            `<script[^>]*src="(?![a-z]+:)[^"]*${escapeRegExp(fileName)}"[^>]*></script>`,
+          )
           const code = file.code.replace(/<\/script>/g, '<\\/script>')
           // 替换值必须是函数：字符串形式的替换值里 `$&`、`` $` ``、`$'` 会被二次展开，
           // 而压缩后的代码里几乎必然含这些序列，会撑破内联后的脚本标签
           html = html.replace(pattern, () => `<script type="module">${code}</script>`)
           delete bundle[fileName]
         } else if (file.type === 'asset' && fileName.endsWith('.css')) {
-          const pattern = new RegExp(`<link[^>]*href="[^"]*${escapeRegExp(fileName)}"[^>]*>`)
+          const pattern = new RegExp(
+            `<link[^>]*href="(?![a-z]+:)[^"]*${escapeRegExp(fileName)}"[^>]*>`,
+          )
           const style = String(file.source).replace(/<\/style>/g, '<\\/style>')
           html = html.replace(pattern, () => `<style>${style}</style>`)
           delete bundle[fileName]

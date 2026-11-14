@@ -25,5 +25,11 @@ export default defineConfig({
     emptyOutDir: true,
     // 样式全部内联，无需单独的文件，也不需要拆包
     cssCodeSplit: false,
+    rollupOptions: {
+      // 配置页跑在联网环境，Vue / Element Plus 由 index.html 里的 import map
+      // 指向 CDN，不打包进产物。external 用函数形式，避免 Vite 先把裸模块名
+      // 解析成 node_modules 里的绝对路径后匹配不上。
+      external: (id) => id === 'vue' || id === 'element-plus',
+    },
   },
 })

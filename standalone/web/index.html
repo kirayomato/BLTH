@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BLTH 配置</title>
+    <!--
+      独立运行版的配置页跑在联网环境，Vue / Element Plus 由 CDN 提供，
+      构建产物只保留本项目的业务代码（见 vite.web.config.ts 的 rollupOptions.external）。
+      import map 必须位于页面里第一个 module script 之前；Element Plus 的
+      index.full.min.mjs 内部会裸导入 "vue"，也靠这里的 "vue" 映射解析，
+      这样全局只有一份 Vue 实例。
+      升级 vue / element-plus 时，请同步更新下面 URL 里的版本号。
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "vue": "https://unpkg.com/vue@3.5.44/dist/vue.esm-browser.prod.js",
+          "element-plus": "https://unpkg.com/element-plus@2.14.0/dist/index.full.min.mjs"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus@2.14.0/dist/index.css" />
   </head>
   <body>
     <div id="app"></div>
