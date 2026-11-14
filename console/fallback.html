@@ -15,6 +15,9 @@
   .status { font-weight: 600; }
   button { padding: 8px 16px; border: 1px solid #cf222e; border-radius: 6px;
            background: #fff; color: #cf222e; cursor: pointer; }
+  button.secondary { padding: 4px 12px; border-color: #d8dee4; color: #1f2328; }
+  input[type=number] { width: 80px; padding: 4px 8px; border: 1px solid #d8dee4;
+                        border-radius: 6px; }
   #logs { background: #fff; border: 1px solid #d8dee4; border-radius: 8px;
           height: 55vh; overflow: auto; padding: 12px;
           font: 12px/1.7 Consolas, monospace; white-space: pre-wrap; }
@@ -31,6 +34,17 @@
   <button id="restart">重新启动该账号</button>
   <button id="refresh-acc">刷新账号列表</button>
 </div></div>
+<div class="card">
+  <div class="row">
+    <label><input type="checkbox" id="sched-on"> 启用定时重启（全部账号）</label>
+    <label for="sched-hours">每隔</label>
+    <input type="number" id="sched-hours" min="0.5" max="168" step="0.5" value="6">
+    <span>小时</span>
+    <button id="sched-save" class="secondary">保存</button>
+    <span id="sched-next" class="sub">读取中…</span>
+  </div>
+  <div class="sub" style="margin-top:8px">到点立即重启所有账号的任务进程，观看直播、点赞等在途任务会被中断；已完成的任务不会重复执行。保存后重新计时。</div>
+</div>
 <div id="logs"></div>
 <script>
 let lastSeq = 0, session = '', current = '';
@@ -87,6 +101,10 @@ async function pollStatus() {
     document.getElementById('status').textContent = data.running
       ? '运行中 · PID ' + data.pid : '已停止 · 退出码 ' + data.exitCode;
   } catch (e) { document.getElementById('status').textContent = '控制台不可用'; }
+  try {
+    const s = await (await fetch('/api/schedule', { cache: 'no-store' })).json();
+    showSchedule(s);
+  } catch (e) { /* 控制台重启期间保留上一次显示 */ }
   setTimeout(pollStatus, 2000);
 }
 document.getElementById('restart').onclick = async () => {
@@ -95,6 +113,33 @@ document.getElementById('restart').onclick = async () => {
   const r = await fetch(api('restart'), { method: 'POST' });
   if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || ('HTTP ' + r.status)); }
 };
+function showSchedule(s) {
+  const el = document.getElementById('sched-next');
+  if (!s.enabled) { el.textContent = '下次重启：未启用'; return; }
+  el.textContent = s.nextRestartAt
+    ? '下次重启：' + new Date(s.nextRestartAt).toLocaleString('zh-CN', {hour12:false})
+    : '下次重启：—';
+}
+async function loadSchedule() {
+  try {
+    const s = await (await fetch('/api/schedule', { cache: 'no-store' })).json();
+    document.getElementById('sched-on').checked = !!s.enabled;
+    document.getElementById('sched-hours').value = s.intervalHours;
+    showSchedule(s);
+  } catch (e) { /* 控制台重启期间保留表单 */ }
+}
+document.getElementById('sched-save').onclick = async () => {
+  const enabled = document.getElementById('sched-on').checked;
+  const hours = Number(document.getElementById('sched-hours').value);
+  const r = await fetch('/api/schedule', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled, intervalHours: hours })
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || ('HTTP ' + r.status)); return; }
+  showSchedule(d);
+};
+loadSchedule();
 loadAccounts('');
 </script>
 </body>

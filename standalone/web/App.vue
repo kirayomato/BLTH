@@ -675,6 +675,111 @@ async function restartProgram(): Promise<void> {
   }
 }
 
+/* ---------------- 定时重启（全部账号） ---------------- */
+
+interface RestartScheduleView {
+  enabled: boolean
+  intervalHours: number
+  nextRestartAt: number | null
+}
+
+const SCHEDULE_MIN_HOURS = 1
+const SCHEDULE_MAX_HOURS = 24
+
+const scheduleEnabled = ref(false)
+const scheduleHours = ref(6)
+const scheduleNextAt = ref<number | null>(null)
+const scheduleLoaded = ref(false)
+const scheduleSaving = ref(false)
+/** 表单有未提交的改动时，轮询不覆盖开关与间隔 */
+const scheduleDirty = ref(false)
+/** 倒计时用的当前时间，随轮询推进 */
+const scheduleNow = ref(Date.now())
+let scheduleTimer: number | undefined
+
+function applySchedule(data: Partial<RestartScheduleView>): void {
+  if (typeof data.enabled === 'boolean') {
+    scheduleEnabled.value = data.enabled
+  }
+  if (typeof data.intervalHours === 'number') {
+    scheduleHours.value = data.intervalHours
+  }
+  scheduleNextAt.value = data.nextRestartAt ?? null
+}
+
+const scheduleNextText = computed(() => {
+  const at = scheduleNextAt.value
+  if (!scheduleEnabled.value || at === null) {
+    return '未启用'
+  }
+
+  const date = new Date(at)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const clock =
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+
+  const diff = at - scheduleNow.value
+  if (diff <= 0) {
+    return `${clock}（即将重启）`
+  }
+
+  const minutes = Math.ceil(diff / 60_000)
+  const hours = Math.floor(minutes / 60)
+  const remain = hours > 0 ? `${hours} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`
+  return `${clock}（约 ${remain} 后）`
+})
+
+/** 轮询推进倒计时与下次重启时间；表单有未提交改动时不覆盖正在编辑的值 */
+async function pollSchedule(): Promise<void> {
+  try {
+    const response = await fetch('/api/schedule', { cache: 'no-store' })
+    if (response.ok) {
+      const data = (await response.json()) as RestartScheduleView
+      if (!scheduleDirty.value) {
+        scheduleEnabled.value = data.enabled
+        scheduleHours.value = data.intervalHours
+      }
+      scheduleNextAt.value = data.nextRestartAt
+      scheduleLoaded.value = true
+    }
+  } catch {
+    // 控制台重启期间保留上一次数据
+  } finally {
+    scheduleNow.value = Date.now()
+    scheduleTimer = window.setTimeout(pollSchedule, 5000)
+  }
+}
+
+async function saveSchedule(): Promise<void> {
+  const hours = scheduleHours.value
+  if (!Number.isFinite(hours) || hours < SCHEDULE_MIN_HOURS || hours > SCHEDULE_MAX_HOURS) {
+    ElMessage.warning(`间隔须在 ${SCHEDULE_MIN_HOURS}~${SCHEDULE_MAX_HOURS} 小时之间`)
+    return
+  }
+
+  scheduleSaving.value = true
+  try {
+    const response = await fetch('/api/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: scheduleEnabled.value, intervalHours: hours }),
+    })
+    const data = (await response.json()) as Partial<RestartScheduleView> & { error?: string }
+    if (!response.ok) {
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+
+    applySchedule(data)
+    scheduleDirty.value = false
+    ElMessage.success('已保存，立即生效')
+  } catch (err) {
+    ElMessage.error(`保存失败：${(err as Error).message}`)
+  } finally {
+    scheduleSaving.value = false
+  }
+}
+
 onMounted(async () => {
   await loadAccounts()
   if (currentAccount.value) {
@@ -683,6 +788,7 @@ onMounted(async () => {
   void pollLogs()
   void pollStatus()
   void pollWatch()
+  void pollSchedule()
 })
 
 onUnmounted(() => {
@@ -691,6 +797,7 @@ onUnmounted(() => {
   window.clearTimeout(statusTimer)
   window.clearTimeout(watchTimer)
   window.clearTimeout(paramSaveTimer)
+  window.clearTimeout(scheduleTimer)
 })
 
 /* ---------------- 观看直播进度 ---------------- */
@@ -1256,7 +1363,7 @@ async function runLike(): Promise<void> {
     <header class="header">
       <div class="header-text">
         <h1>BLTH 配置</h1>
-        <p class="hint">此处可调整任务开关、观看时长与少量开关型参数；其余任务参数（投币数量、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；需要停止全部任务并按新配置从头重跑时，点右上角【重新启动任务】</p>
+        <p class="hint">此处可调整任务开关、观看时长与少量开关型参数；其余任务参数（投币数量、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；需要停止全部任务并按新配置从头重跑时，点右上角【重新启动任务】，或用下方【定时重启】按固定间隔自动重跑</p>
         <p class="hint process-status" :class="{ stopped: processStatus && !processStatus.running }">
           {{ statusText }}
         </p>
@@ -1265,6 +1372,48 @@ async function runLike(): Promise<void> {
         重新启动该账号
       </el-button>
     </header>
+
+    <el-card shadow="never" class="card">
+      <template #header>
+        <span class="group-name">定时重启（全部账号）</span>
+      </template>
+
+      <p class="hint">
+        每隔指定时长自动重新启动所有账号的任务进程：重读配置与 cookie，全部任务从头运行。到点立即执行，观看直播、点赞等在途任务会被中断；今天已完成的任务由完成标记挡住，不会重复执行。此设置对全部账号生效，与上方选中的账号无关；保存后重新计时，控制台自身重启后也会重新计时。
+      </p>
+
+      <div class="row">
+        <el-switch
+          v-model="scheduleEnabled"
+          active-text="启用定时重启"
+          @change="scheduleDirty = true"
+        />
+        <span class="label">每隔</span>
+        <el-input-number
+          v-model="scheduleHours"
+          size="small"
+          class="schedule-input"
+          :min="SCHEDULE_MIN_HOURS"
+          :max="SCHEDULE_MAX_HOURS"
+          :step="1"
+          :precision="1"
+          @change="scheduleDirty = true"
+        />
+        <span class="label">小时</span>
+        <el-button
+          type="primary"
+          size="small"
+          :loading="scheduleSaving"
+          :disabled="!scheduleLoaded"
+          @click="saveSchedule"
+        >
+          保存
+        </el-button>
+        <span v-if="scheduleDirty" class="task-hint">有未保存的改动</span>
+      </div>
+
+      <p class="hint schedule-next">下次重启：{{ scheduleNextText }}</p>
+    </el-card>
 
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
 
@@ -1911,6 +2060,14 @@ async function runLike(): Promise<void> {
 
 .param-unit {
   font-size: 13px;
+}
+
+.schedule-input {
+  width: 130px;
+}
+
+.schedule-next {
+  margin-top: 8px;
 }
 
 .task-hint {

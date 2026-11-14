@@ -8,6 +8,9 @@ cookie，互不影响）。重启因此是一次进程替换：停止旧进程�
 配置与点赞请求经由 stdin/stdout 上的单行 JSON 控制通道转发给任务进程；控制台自己不写
 ``storage.json``，文件的唯一写入方始终是任务进程，因此不存在两边并发覆盖。
 
+定时重启由控制台自己调度并存进 ``data/console.json``：全局一份设置，作用于全部账号，
+与任务进程的配置分开。
+
 任务进程的日志汇进内存缓冲供页面增量拉取，同时原样打印到控制台终端，便于脱离浏览器观察。
 
 只依赖标准库，入口为 ``python console/console.py``。
@@ -50,6 +53,15 @@ ACCOUNT_PREFIX = "/api/accounts/"
 LEGACY_STORAGE = ROOT / "data" / "storage.json"
 LEGACY_COOKIE = ROOT / "cookie.txt"
 DEFAULT_ACCOUNT = "默认"
+
+# 定时重启是控制台级的全局设置：一份配置作用于全部账号，由控制台自己落盘。
+# 它不属于任务进程的 modules 配置，不能写进 storage.json（那里面只有任务进程能写）。
+SCHEDULE_FILE = ROOT / "data" / "console.json"
+SCHEDULE_MIN_HOURS = 0.5
+SCHEDULE_MAX_HOURS = 168
+SCHEDULE_DEFAULT_HOURS = 6
+# 调度线程的轮询间隔：到点判断不需要更细的粒度
+SCHEDULE_TICK_SECONDS = 5
 
 # 没有 dist-web 时使用的精简页
 FALLBACK_FILE = CONSOLE_DIR / "fallback.html"
@@ -204,6 +216,11 @@ def print_line(level: str, title: str, text: str) -> None:
             stream.flush()
         except (OSError, ValueError):
             pass
+
+
+def format_when(timestamp: float) -> str:
+    """把秒级时间戳格式化成控制台所在时区的可读时间。"""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
 
 class LogBuffer:
@@ -714,9 +731,149 @@ class AccountManager:
         return True
 
 
+class RestartSchedule:
+    """全局定时重启设置：按固定间隔重启全部账号的任务进程。
+
+    配置由控制台自己写进 ``data/console.json``，与任务进程独占的 ``storage.json`` 分开。
+    下次重启时刻只在内存里维护：控制台自身重启后重新计时，避免残留的过期时间戳
+    让页面一打开就立刻触发一轮重启。
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.Lock()
+        self.enabled = False
+        self.interval_hours: float = SCHEDULE_DEFAULT_HOURS
+        self.next_at: float | None = None
+        self._load()
+        self._arm(time.time())
+
+    def _load(self) -> None:
+        """读取上次保存的设置；文件缺失或损坏时静默回退到默认关闭。"""
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        schedule = data.get("autoRestart")
+        if not isinstance(schedule, dict):
+            return
+
+        enabled = schedule.get("enabled")
+        interval = schedule.get("intervalHours")
+        if isinstance(enabled, bool):
+            self.enabled = enabled
+        if (
+            isinstance(interval, (int, float))
+            and not isinstance(interval, bool)
+            and SCHEDULE_MIN_HOURS <= interval <= SCHEDULE_MAX_HOURS
+        ):
+            self.interval_hours = float(interval)
+
+    def _arm(self, now: float) -> None:
+        """从 now 起重新计算下一次重启时刻；构造阶段之外调用方须持有 self.lock。"""
+        self.next_at = now + self.interval_hours * 3600 if self.enabled else None
+
+    def _save(self) -> None:
+        """原子落盘：先写临时文件再改名，控制台中途退出也不会留下半截文件。"""
+        payload = {
+            "autoRestart": {
+                "enabled": self.enabled,
+                "intervalHours": self.interval_hours,
+            }
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(str(self.path) + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, self.path)
+
+    def view(self) -> dict:
+        with self.lock:
+            return {
+                "enabled": self.enabled,
+                "intervalHours": self.interval_hours,
+                "nextRestartAt": (
+                    int(self.next_at * 1000) if self.next_at is not None else None
+                ),
+            }
+
+    def summary(self) -> str | None:
+        """一行中文状态，写进各账号日志与终端；未启用时返回 None。"""
+        with self.lock:
+            if not self.enabled or self.next_at is None:
+                return None
+            return (
+                f"定时重启已启用：每 {self.interval_hours:g} 小时，"
+                f"下次 {format_when(self.next_at)}"
+            )
+
+    def update(self, enabled: bool, interval_hours: float) -> dict:
+        """应用页面提交的设置并立即重新计时；落盘失败时回滚内存状态并向上抛出。"""
+        with self.lock:
+            previous = (self.enabled, self.interval_hours, self.next_at)
+            self.enabled = enabled
+            self.interval_hours = interval_hours
+            self._arm(time.time())
+            try:
+                self._save()
+            except OSError as error:
+                self.enabled, self.interval_hours, self.next_at = previous
+                raise RuntimeError(f"保存定时重启设置失败：{error}") from error
+        return self.view()
+
+    def take_due(self) -> float | None:
+        """到点则把下次时刻顺延一个周期并返回间隔；未到点或未启用返回 None。"""
+        with self.lock:
+            if not self.enabled or self.next_at is None:
+                return None
+            now = time.time()
+            if now < self.next_at:
+                return None
+            # 先顺延再返回：重启耗时再久也不会在同一轮里被重复触发
+            self.next_at = now + self.interval_hours * 3600
+            return self.interval_hours
+
+
+def broadcast_log(accounts: AccountManager, text: str, level: str = "info") -> int:
+    """给每个账号各写一条控制台日志，页面切到哪个账号都能看到；返回写入条数。"""
+    try:
+        targets = list(accounts.accounts.values())
+    except RuntimeError:
+        # 账号清单正在增删，跳过这一条提示即可
+        return 0
+    for account in targets:
+        account.logs.append(level, text, title="[Console]")
+    return len(targets)
+
+
+def restart_scheduler(accounts: AccountManager, schedule: RestartSchedule) -> None:
+    """后台轮询到点重启全部账号；复用 Supervisor 的重启锁，连点/撞车都不会叠加进程。"""
+    while True:
+        time.sleep(SCHEDULE_TICK_SECONDS)
+        interval = schedule.take_due()
+        if interval is None:
+            continue
+
+        broadcast_log(accounts, f"定时重启到点（每 {interval:g} 小时），正在重新启动任务进程")
+        try:
+            targets = list(accounts.accounts.values())
+        except RuntimeError:
+            continue
+
+        for account in targets:
+            if not account.restart():
+                account.logs.append(
+                    "warn", "定时重启跳过：该账号正在重新启动中", title="[Console]"
+                )
+
+
 class Handler(BaseHTTPRequestHandler):
     accounts: AccountManager
     web_page: Path
+    schedule: RestartSchedule
 
     def log_message(self, _format: str, *_args: object) -> None:
         # 访问日志会混进终端输出，这里保持安静
@@ -849,6 +1006,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(204, b"", "image/x-icon")
             return
 
+        if path == "/api/schedule":
+            self._send_json(200, self.schedule.view())
+            return
+
         if path == "/api/accounts":
             self._send_json(
                 200,
@@ -893,6 +1054,50 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+
+        if path == "/api/schedule":
+            body = self._read_body()
+            if body is None:
+                self._send_json(400, {"error": "请求体长度不合法"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (ValueError, UnicodeDecodeError):
+                self._send_json(400, {"error": "请求体不是合法的 JSON"})
+                return
+            if not isinstance(payload, dict):
+                self._send_json(400, {"error": "请求体必须是 JSON 对象"})
+                return
+
+            enabled = payload.get("enabled")
+            hours = payload.get("intervalHours")
+            if not isinstance(enabled, bool):
+                self._send_json(400, {"error": "enabled 必须是布尔值"})
+                return
+            if (
+                not isinstance(hours, (int, float))
+                or isinstance(hours, bool)
+                or not (SCHEDULE_MIN_HOURS <= hours <= SCHEDULE_MAX_HOURS)
+            ):
+                self._send_json(
+                    400,
+                    {
+                        "error": f"intervalHours 须在 "
+                        f"{SCHEDULE_MIN_HOURS}~{SCHEDULE_MAX_HOURS} 之间"
+                    },
+                )
+                return
+
+            try:
+                data = self.schedule.update(enabled, float(hours))
+            except RuntimeError as error:
+                self._send_json(500, {"error": str(error)})
+                return
+
+            text = self.schedule.summary() or "定时重启已关闭"
+            broadcast_log(self.accounts, f"定时重启设置已更新：{text}")
+            self._send_json(200, data)
+            return
 
         if path == "/api/accounts":
             body = self._read_body()
@@ -1003,10 +1208,20 @@ def main() -> int:
     accounts = AccountManager(args.node, script)
     accounts.ensure_default()
     accounts.scan()
+    schedule = RestartSchedule(SCHEDULE_FILE)
     Handler.accounts = accounts
     Handler.web_page = web_page
+    Handler.schedule = schedule
     for account in accounts.accounts.values():
         account.start()
+
+    summary = schedule.summary()
+    if summary and broadcast_log(accounts, summary) == 0:
+        # 一个账号都没有时也要让终端看到设置已生效
+        print_line("info", "[Console]", summary)
+    threading.Thread(
+        target=restart_scheduler, args=(accounts, schedule), daemon=True
+    ).start()
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     server.daemon_threads = True

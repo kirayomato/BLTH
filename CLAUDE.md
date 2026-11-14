@@ -69,6 +69,16 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs  # 仅检查登录态，�
 页面不会断连。今天已完成的任务仍由模块自己的完成标记挡住，不会重复扣币或兑换。
 连点会返回 409，不会叠加出多份进程；重启窗口内配置类接口返回 503。
 
+定时重启（`GET/POST /api/schedule`）：控制台级的**全局**设置，所有账号共用一份，存在
+`data/console.json`，由控制台自己读写。它不属于任务进程的 `modules` 配置，不能放进
+`data/storage.json`（后者的唯一写入方是任务进程）。字段为 `autoRestart.enabled` 与
+`autoRestart.intervalHours`（1~24 小时，默认 6）。`RestartSchedule` 只在内存里维护下次
+重启时刻：控制台自身重启后重新计时，避免残留的过期时间戳让页面一打开就触发一轮重启；
+保存设置同样重新计时。后台线程每 5 秒检查一次，到点先顺延下次时刻，再对全部账号调用同一个
+`account.restart()`（立即停止并重启，在途任务会被中断），并以 `[Console]` 给每个账号各写一条
+日志，页面切到哪个账号都能看到。完整配置页与精简页都能改这项设置，页面每 5 秒轮询
+`nextRestartAt` 显示倒计时；表单有未提交改动时轮询不会覆盖它。
+
 Windows 下控制台用 Ctrl+Break 通知任务进程退出，POSIX 下用 SIGTERM；两者都走
 `main.ts` 的 shutdown 留出落盘时间，超时 3 秒后强制结束。`storage.json` 采用临时文件改名写入，
 强杀也不会留下半截文件。
