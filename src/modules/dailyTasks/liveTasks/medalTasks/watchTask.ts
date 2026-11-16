@@ -18,6 +18,10 @@ interface SpyderData {
   ua: string
 }
 
+interface WatchStopSignal {
+  stopped: boolean
+}
+
 class RoomHeart {
   constructor(
     roomID: number,
@@ -26,7 +30,8 @@ class RoomHeart {
     parentID: number,
     ruid: number,
     watchMinutes: number,
-    initialProgress: number
+    initialProgress: number,
+    signal: WatchStopSignal
   ) {
     this.roomID = roomID
     this.areaID = areaID
@@ -36,6 +41,7 @@ class RoomHeart {
     this.uname = uname
     this.watchMinutes = watchMinutes
     this.initialProgress = initialProgress
+    this.signal = signal
     // 15分钟折算1点进度
     this.targetProgress = watchMinutes / 15
     // 未达到目标进度时，最多观看规划时长+15分钟
@@ -66,6 +72,8 @@ class RoomHeart {
   /** 主播的 UID */
   private readonly ruid: number
   private readonly uname: string
+  /** 停止标记由本轮运行持有，重新打开开关后旧心跳不再继续 */
+  private readonly signal: WatchStopSignal
   private seq = 0
   private progress = -1
   /** 计算签名和发送请求时均需要 JSON.stringify */
@@ -119,6 +127,7 @@ class RoomHeart {
             timestamp: this.timestamp,
           } = response.data)
         await sleep(this.heartBeatInterval * 1000)
+        if (this.signal.stopped) return
         return this.X()
       } else {
         this.logger.error(
@@ -135,6 +144,7 @@ class RoomHeart {
    * X心跳，E心跳过后都是X心跳
    */
   private async X(): Promise<void> {
+    if (this.signal.stopped) return
     if (!this.config.enabled) {
       this.logger.log(`观看直播开关已关闭，停止直播间 ${this.roomID} 的X心跳`)
       return
@@ -175,6 +185,7 @@ class RoomHeart {
         this.seq += 1
         this.watchedSeconds += this.heartBeatInterval
         const state = await MedalModule.queryMissionState(this.ruid, '观看')
+        if (this.signal.stopped) return
         if (!state.available) {
           this.logger.warn(`${this.uname}(${this.roomID}) 勋章信息获取失败，结束观看`)
           return
@@ -216,6 +227,7 @@ class RoomHeart {
           timestamp: this.timestamp,
         } = response.data)
         await sleep(this.heartBeatInterval * 1000)
+        if (this.signal.stopped) return
         return this.X()
       } else {
         this.logger.error(
@@ -293,6 +305,27 @@ class WatchTask extends MedalModule {
   }
 
   private playerStore = usePlayerStore()
+  /** 当前一轮的停止标记，重新打开开关后旧轮次不会继续发心跳或重新排期 */
+  private currentSignal?: WatchStopSignal
+
+  /**
+   * 停止当前轮次，清除排期和面板进度。
+   *
+   * 在途的 X 请求会照常返回，但心跳链和房间循环都会在新一轮开始前停下。
+   */
+  public stop(): void {
+    if (this.currentSignal) {
+      this.currentSignal.stopped = true
+      this.currentSignal = undefined
+    }
+    if (this.nextRunTimer !== undefined) {
+      clearTimeout(this.nextRunTimer)
+      this.nextRunTimer = undefined
+    }
+    useModuleStore().liveWatchInfo = null
+    this.status = ''
+  }
+
 
   /**
    * 获取粉丝勋章
@@ -357,10 +390,17 @@ class WatchTask extends MedalModule {
 
   public async run(): Promise<void> {
     this.logger.log('观看直播模块开始运行')
+    const signal: WatchStopSignal = { stopped: false }
+    this.currentSignal = signal
 
     if (!(await this.waitForFansMedals())) {
       this.logger.error('粉丝勋章数据不存在，不执行观看直播任务')
+      this.currentSignal = undefined
       this.status = 'error'
+      return
+    }
+    if (signal.stopped) {
+      this.currentSignal = undefined
       return
     }
 
@@ -371,6 +411,7 @@ class WatchTask extends MedalModule {
       let i: number
 
       for (i = 0; i < fansMedals.length; i++) {
+        if (signal.stopped) break
         if (!this.config.enabled) {
           this.logger.log('观看直播开关已关闭，停止观看直播任务')
           break
@@ -385,6 +426,7 @@ class WatchTask extends MedalModule {
         const uid = medal.medal.target_id
         const uname = medal.anchor_info.nick_name
         const [area_id, parent_area_id] = await this.getAreaInfo(medal.room_info.url, roomid)
+        if (signal.stopped) break
         let watchMinutes = this.config.time
         if (this.config.autoAllocateTime) {
           // 把到 24:00 之前的剩余时间平均分配给剩余的直播间（含当前直播间在内的剩余数量），
@@ -399,6 +441,7 @@ class WatchTask extends MedalModule {
         watchMinutes = Math.ceil(watchMinutes / 15) * 15
         if (area_id > 0 && parent_area_id > 0) {
           const state = await this.fetchMissionState(medal, '观看')
+          if (signal.stopped) break
           const targetProgress = watchMinutes / 15
           if (!state.available) {
             this.logger.warn(`${uname}(${roomid}) 勋章信息获取失败，跳过该直播间`)
@@ -441,14 +484,19 @@ class WatchTask extends MedalModule {
               parent_area_id,
               uid,
               watchMinutes,
-              prog
+              prog,
+              signal
             ).start()
           } finally {
             // 心跳正常达标或抛异常都要清除，避免面板残留上一个直播间
-            useModuleStore().liveWatchInfo = null
+            if (this.currentSignal === signal) {
+              useModuleStore().liveWatchInfo = null
+            }
           }
         }
       }
+
+      if (this.currentSignal !== signal) return
 
       if (i === fansMedals.length) {
         // 没有提早跳出循环，说明所有直播间的观看任务均已完成
@@ -462,6 +510,9 @@ class WatchTask extends MedalModule {
       this.status = 'done'
       this.config._lastCompleteTime = tsm()
     }
+
+    if (this.currentSignal !== signal) return
+    this.currentSignal = undefined
 
     const diff = delayToNextMoment()
     this.nextRunTimer = setTimeout(() => this.run(), diff.ms)

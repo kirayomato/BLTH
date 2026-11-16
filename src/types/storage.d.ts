@@ -48,6 +48,8 @@ interface ModuleConfig {
           time: number
           /** 是否把到 24:00 之前的剩余时间平均分配给剩余的直播间；关闭时每个直播间都看满 time 分钟 */
           autoAllocateTime: boolean
+          /** 点击停止并延迟重启后等待的分钟数 */
+          restartDelayMinutes: number
           _lastCompleteTime: number
         }
         isWhiteList: boolean

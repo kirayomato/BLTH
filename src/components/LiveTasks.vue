@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useModuleStore, useBiliStore, useUIStore } from '@/stores'
-import { Check, Edit, Delete, Rank, Search, Star } from '@element-plus/icons-vue'
+import { Check, Edit, Delete, Rank, RefreshRight, Search, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import helpInfo from '@/library/help-info'
 import { VueDraggable } from 'vue-draggable-plus'
 import { arrayToMap, CANCELLED_NICK_NAME } from '@/library/utils'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
+import type WatchTask from '@/modules/dailyTasks/liveTasks/medalTasks/watchTask'
 
 interface MedalRow {
   avatar: string
@@ -629,6 +630,45 @@ watch(
     moduleStore.rerunModule('DailyTask_LiveTask_WatchTask')
   },
 )
+
+const watchRestarting = ref(false)
+let watchRestartTimer: number | undefined
+
+/** 停止当前观看并在配置的延迟后重跑一轮，配置开关保持不变 */
+const handleWatchRestart = async () => {
+  if (watchRestarting.value) return
+  const instance = moduleStore.moduleInstances['DailyTask_LiveTask_WatchTask'] as
+    | WatchTask
+    | undefined
+  if (!instance) {
+    ElMessage.warning('观看直播模块尚未加载，请稍后再试')
+    return
+  }
+
+  const minutes = Math.min(180, Math.max(5, Math.floor(config.medalTasks.watch.restartDelayMinutes) || 5))
+  try {
+    await ElMessageBox.confirm(
+      `会停止当前观看直播任务，${minutes} 分钟后从名单第一个直播间重新开始。`,
+      '停止并延迟重启',
+      { type: 'warning', confirmButtonText: '停止并重启', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  watchRestarting.value = true
+  instance.stop()
+  ElMessage.success(`观看直播已停止，${minutes} 分钟后重新开始`)
+
+  watchRestartTimer = window.setTimeout(() => {
+    watchRestartTimer = undefined
+    // 面板可能已经切到别的页，不能依赖这里的 watch 来重跑任务
+    if (config.medalTasks.watch.enabled && moduleStore.moduleInstances['DailyTask_LiveTask_WatchTask']) {
+      moduleStore.rerunModule('DailyTask_LiveTask_WatchTask')
+    }
+    watchRestarting.value = false
+  }, minutes * 60 * 1000)
+}
 </script>
 
 <template>
@@ -685,6 +725,25 @@ watch(
           active-text="自动分配时长"
           :disabled="!config.medalTasks.watch.enabled"
         />
+        <el-input-number
+          v-model="config.medalTasks.watch.restartDelayMinutes"
+          :min="5"
+          :max="180"
+          :precision="0"
+          :controls="false"
+          :value-on-clear="5"
+          style="width: 70px"
+        />
+        <el-text>分钟后重启</el-text>
+        <el-button
+          type="warning"
+          size="small"
+          :icon="RefreshRight"
+          :loading="watchRestarting"
+          :disabled="!config.medalTasks.watch.enabled"
+          @click="handleWatchRestart"
+          >停止并延迟重启
+        </el-button>
         <Info :item="helpInfo.DailyTasks.LiveTasks.medalTasks.watch" />
         <TaskStatus :status="status.medalTasks.watch" @click="reset.medalTasks.watch" />
       </el-space>

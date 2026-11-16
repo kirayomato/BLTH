@@ -1,9 +1,10 @@
 import Logger from '@/library/logger'
 import { CANCELLED_NICK_NAME } from '@/library/utils'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
+import WatchTask from '@/modules/dailyTasks/liveTasks/medalTasks/watchTask'
 import { useBiliStore, useModuleStore } from '@/stores'
 import type { ModuleConfig, RoomidEntry } from '@/types'
-import { runModule } from './runner'
+import { loadModule, runModule } from './runner'
 
 /**
  * 任务进程与控制台之间的控制通道。
@@ -18,6 +19,12 @@ const CONTROL_PREFIX = '\u001eBLTHCTL'
 
 /** 点赞任务模块名 */
 const LIKE_MODULE_NAME = 'DailyTask_LiveTask_LightTask'
+/** 观看直播任务模块名 */
+const WATCH_MODULE_NAME = 'DailyTask_LiveTask_WatchTask'
+/** 观看直播开关在控制协议里的 id */
+const WATCH_TASK_ID = 'DailyTasks.LiveTasks.medalTasks.watch'
+/** 延迟重启观看任务的定时器；重复点击只保留一份 */
+let watchRestartTimer: number | undefined
 
 const logger = new Logger('Control')
 
@@ -168,6 +175,16 @@ const PARAM_ENTRIES: ParamEntry[] = [
     max: 180,
     hint: '关闭【自动分配时长】时按此看满；开启时作为单个直播间的上限。实际按 15 分钟的倍数向上取整',
   },
+  {
+    path: ['DailyTasks', 'LiveTasks', 'medalTasks', 'watch'],
+    field: 'restartDelayMinutes',
+    group: '直播任务',
+    label: '重启延迟',
+    unit: '分钟',
+    min: 5,
+    max: 180,
+    hint: '点【停止并延迟重启】后等待多久重新开始，范围 5~180 分钟',
+  },
 ]
 
 function ok(data: unknown): ControlReply {
@@ -249,6 +266,13 @@ function applyTasks(updates: { id?: string; enabled?: unknown }[]): void {
 
   cancelScheduled(newlyDisabled)
   runNewlyEnabled(newlyEnabled)
+
+  // 延迟重启期间用户又关了一次开关，视为放弃这次重启
+  if (newlyDisabled.some((entry) => entryId(entry) === WATCH_TASK_ID) && watchRestartTimer !== undefined) {
+    clearTimeout(watchRestartTimer)
+    watchRestartTimer = undefined
+    logger.log('已取消观看直播的延迟重启')
+  }
 }
 
 /** 配置对象中承载参数值的那个节点 */
@@ -545,6 +569,50 @@ function runLikes(payload: Record<string, any>): ControlReply {
   return { status: 202, data: { accepted: true } }
 }
 
+/**
+ * 停止观看直播任务，延迟后触发新一轮。
+ *
+ * 只发停止信号，不改配置开关：进程被替换后配置仍是开启状态，新进程按正常流程启动。
+ * 延迟在任务进程内计时，页面关掉也不影响。
+ */
+function restartWatch(): ControlReply {
+  const instance = useModuleStore().moduleInstances[WATCH_MODULE_NAME] as unknown as
+    | WatchTask
+    | undefined
+  if (!instance) {
+    return fail(500, '观看直播模块未加载')
+  }
+
+  const config = useModuleStore().moduleConfig.DailyTasks.LiveTasks.medalTasks.watch
+  if (!config.enabled) {
+    return fail(409, '观看直播开关未打开')
+  }
+  if (watchRestartTimer !== undefined) {
+    return fail(409, '已安排延迟重启，请稍后')
+  }
+
+  const minutes = Math.min(180, Math.max(5, Math.floor(Number(config.restartDelayMinutes) || 5)))
+  const delayMs = minutes * 60 * 1000
+
+  instance.stop()
+  logger.log(`观看直播任务已停止，${minutes} 分钟后重新开始`)
+
+  watchRestartTimer = setTimeout(() => {
+    watchRestartTimer = undefined
+    // 延迟期间用户关掉了开关，就放弃这次重启
+    if (!config.enabled) return
+
+    // 换成新实例，避开 runner 对旧实例的占用判断；旧心跳已被 stop() 标记退出
+    const fresh = loadModule(WatchTask, WATCH_MODULE_NAME)
+    if (fresh) {
+      void runModule(WATCH_MODULE_NAME, fresh)
+      logger.log('观看直播任务已重新开始')
+    }
+  }, delayMs)
+
+  return ok({ restartAt: Date.now() + delayMs })
+}
+
 /* ---------------- 粉丝勋章名单 ---------------- */
 
 /** 名单编辑用的直播间行，字段与网页版的 MedalRow 一致 */
@@ -692,6 +760,9 @@ async function dispatch(action: string, payload: Record<string, any>): Promise<C
 
     case 'watch.get':
       return ok(useModuleStore().liveWatchInfo)
+
+    case 'watch.restart':
+      return restartWatch()
 
     default:
       return fail(404, `未知操作 ${action}`)

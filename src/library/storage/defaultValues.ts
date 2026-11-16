@@ -110,6 +110,7 @@ const defaultValues: DefaultValues = {
             time: 25,
             // 默认开启：保持「观看时间分配」的行为，老配置补齐该字段后不受影响
             autoAllocateTime: true,
+            restartDelayMinutes: 5,
             _lastCompleteTime: 0,
           },
           isWhiteList: false,

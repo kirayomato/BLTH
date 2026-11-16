@@ -675,6 +675,53 @@ async function restartProgram(): Promise<void> {
   }
 }
 
+const watchRestarting = ref(false)
+const watchRestartDelayMinutes = computed(() => {
+  const param = params.value.find(
+    (item) => item.id === 'DailyTasks.LiveTasks.medalTasks.watch.restartDelayMinutes',
+  )
+  return Math.min(180, Math.max(5, Math.floor(param?.value || 5)))
+})
+
+async function restartWatchTask(): Promise<void> {
+  if (watchRestarting.value) return
+  const minutes = watchRestartDelayMinutes.value
+
+  try {
+    await ElMessageBox.confirm(
+      `会停止当前账号的观看直播任务，${minutes} 分钟后从名单第一个直播间重新开始。其它任务不受影响。`,
+      '停止并重启观看',
+      { type: 'warning', confirmButtonText: '停止并重启', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  watchRestarting.value = true
+  let scheduled = false
+  try {
+    const response = await fetch(accountEndpoint('watch'), { method: 'POST' })
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+    scheduled = true
+    ElMessage.success(`观看直播已停止，${minutes} 分钟后重新开始`)
+    await load()
+  } catch (err) {
+    ElMessage.error(`停止并重启失败：${(err as Error).message}`)
+  } finally {
+    if (scheduled) {
+      window.setTimeout(() => {
+        watchRestarting.value = false
+        void load()
+      }, minutes * 60 * 1000 + 2000)
+    } else {
+      watchRestarting.value = false
+    }
+  }
+}
+
 /* ---------------- 定时重启（全部账号） ---------------- */
 
 interface RestartScheduleView {
@@ -1363,14 +1410,16 @@ async function runLike(): Promise<void> {
     <header class="header">
       <div class="header-text">
         <h1>BLTH 配置</h1>
-        <p class="hint">此处可调整任务开关、观看时长与少量开关型参数；其余任务参数（投币数量、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；需要停止全部任务并按新配置从头重跑时，点右上角【重新启动任务】，或用下方【定时重启】按固定间隔自动重跑</p>
+        <p class="hint">此处可调整任务开关、观看时长与少量开关型参数；其余任务参数（投币数量、弹幕列表、房间名单）在页面底部的「配置 JSON」中修改。改动即时生效；只重跑观看直播用该任务的【停止并重启观看】，停止全部任务并按新配置从头重跑用【重新启动该账号】，或用下方【定时重启】按固定间隔自动重跑</p>
         <p class="hint process-status" :class="{ stopped: processStatus && !processStatus.running }">
           {{ statusText }}
         </p>
       </div>
-      <el-button type="danger" plain :loading="restarting" @click="restartProgram">
-        重新启动该账号
-      </el-button>
+      <div class="header-actions">
+        <el-button type="danger" plain :loading="restarting" @click="restartProgram">
+          重新启动该账号
+        </el-button>
+      </div>
     </header>
 
     <el-card shadow="never" class="card">
@@ -1845,6 +1894,17 @@ async function runLike(): Promise<void> {
           />
           <span class="label">{{ task.label }}</span>
           <span v-if="task.hint" class="task-hint">{{ task.hint }}</span>
+          <el-button
+            v-if="task.id === 'DailyTasks.LiveTasks.medalTasks.watch'"
+            type="warning"
+            plain
+            size="small"
+            :loading="watchRestarting"
+            :disabled="!task.enabled || !processStatus?.running"
+            @click="restartWatchTask"
+          >
+            停止并重启观看
+          </el-button>
         </div>
 
         <div
@@ -1974,6 +2034,13 @@ async function runLike(): Promise<void> {
   margin: 0 0 6px;
   font-size: 20px;
   font-weight: 500;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .card-header {

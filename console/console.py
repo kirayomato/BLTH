@@ -102,6 +102,7 @@ PROXY_POST = {
     "params": "params.set",
     "like": "like.set",
     "medals": "medals.set",
+    "watch": "watch.restart",
 }
 # 需要逐个探测直播间的操作，耗时与房间数成正比
 LONG_ACTIONS = {"like.get"}
