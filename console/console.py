@@ -799,6 +799,9 @@ class RestartSchedule:
                 "nextRestartAt": (
                     int(self.next_at * 1000) if self.next_at is not None else None
                 ),
+                "minHours": SCHEDULE_MIN_HOURS,
+                "maxHours": SCHEDULE_MAX_HOURS,
+                "defaultHours": SCHEDULE_DEFAULT_HOURS,
             }
 
     def summary(self) -> str | None:

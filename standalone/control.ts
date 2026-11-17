@@ -1,5 +1,6 @@
 import Logger from '@/library/logger'
 import { CANCELLED_NICK_NAME } from '@/library/utils'
+import { SETTING_RANGES, normalizeSetting } from '@/library/utils/constants'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import WatchTask from '@/modules/dailyTasks/liveTasks/medalTasks/watchTask'
 import { useBiliStore, useModuleStore } from '@/stores'
@@ -171,8 +172,8 @@ const PARAM_ENTRIES: ParamEntry[] = [
     group: '直播任务',
     label: '观看时长',
     unit: '分钟 / 直播间',
-    min: 5,
-    max: 180,
+    min: SETTING_RANGES.watchTime.min,
+    max: SETTING_RANGES.watchTime.max,
     hint: '关闭【自动分配时长】时按此看满；开启时作为单个直播间的上限。实际按 15 分钟的倍数向上取整',
   },
   {
@@ -181,9 +182,9 @@ const PARAM_ENTRIES: ParamEntry[] = [
     group: '直播任务',
     label: '重启延迟',
     unit: '分钟',
-    min: 5,
-    max: 180,
-    hint: '点【停止并延迟重启】后等待多久重新开始，范围 5~180 分钟',
+    min: SETTING_RANGES.watchRestartDelay.min,
+    max: SETTING_RANGES.watchRestartDelay.max,
+    hint: `点【停止并延迟重启】后等待多久重新开始，范围 ${SETTING_RANGES.watchRestartDelay.min}~${SETTING_RANGES.watchRestartDelay.max} 分钟`,
   },
 ]
 
@@ -591,7 +592,7 @@ function restartWatch(): ControlReply {
     return fail(409, '已安排延迟重启，请稍后')
   }
 
-  const minutes = Math.min(180, Math.max(5, Math.floor(Number(config.restartDelayMinutes) || 5)))
+  const minutes = normalizeSetting(config.restartDelayMinutes, SETTING_RANGES.watchRestartDelay)
   const delayMs = minutes * 60 * 1000
 
   instance.stop()

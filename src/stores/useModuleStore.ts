@@ -1,6 +1,6 @@
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import Storage from '@/library/storage'
+import Storage, { normalizeModuleConfig } from '@/library/storage'
 import _ from 'lodash'
 import type { ModuleConfig, ModuleReset } from '@/types'
 import * as defaultModules from '@/modules/default'
@@ -284,10 +284,14 @@ export const useModuleStore = defineStore('module', () => {
   // 监听模块配置信息的变化，使用防抖降低油猴写配置信息频率
   watch(
     moduleConfig,
-    _.debounce((newModuleConfig: ModuleConfig) => Storage.setModuleConfig(newModuleConfig), 250, {
-      leading: true,
-      trailing: true,
-    }),
+    _.debounce(
+      (newModuleConfig: ModuleConfig) => Storage.setModuleConfig(normalizeModuleConfig(newModuleConfig)),
+      250,
+      {
+        leading: true,
+        trailing: true,
+      },
+    ),
     { deep: true },
   )
 

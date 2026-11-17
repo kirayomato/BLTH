@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
-import { CANCELLED_NICK_NAME } from '@/library/utils/constants'
+import { CANCELLED_NICK_NAME, SETTING_RANGES, normalizeSetting } from '@/library/utils/constants'
 import type {
   LikeCandidateSnapshot,
   LikeRoomCandidate,
@@ -680,7 +680,7 @@ const watchRestartDelayMinutes = computed(() => {
   const param = params.value.find(
     (item) => item.id === 'DailyTasks.LiveTasks.medalTasks.watch.restartDelayMinutes',
   )
-  return Math.min(180, Math.max(5, Math.floor(param?.value || 5)))
+  return normalizeSetting(param?.value, SETTING_RANGES.watchRestartDelay)
 })
 
 async function restartWatchTask(): Promise<void> {
@@ -728,13 +728,15 @@ interface RestartScheduleView {
   enabled: boolean
   intervalHours: number
   nextRestartAt: number | null
+  minHours?: number
+  maxHours?: number
 }
-
-const SCHEDULE_MIN_HOURS = 1
-const SCHEDULE_MAX_HOURS = 24
 
 const scheduleEnabled = ref(false)
 const scheduleHours = ref(6)
+/** 范围由控制台下发，接口返回前不施加本地限制 */
+const scheduleMinHours = ref(Number.NEGATIVE_INFINITY)
+const scheduleMaxHours = ref(Number.POSITIVE_INFINITY)
 const scheduleNextAt = ref<number | null>(null)
 const scheduleLoaded = ref(false)
 const scheduleSaving = ref(false)
@@ -744,7 +746,17 @@ const scheduleDirty = ref(false)
 const scheduleNow = ref(Date.now())
 let scheduleTimer: number | undefined
 
+function applyScheduleLimits(data: Partial<RestartScheduleView>): void {
+  if (typeof data.minHours === 'number') {
+    scheduleMinHours.value = data.minHours
+  }
+  if (typeof data.maxHours === 'number') {
+    scheduleMaxHours.value = data.maxHours
+  }
+}
+
 function applySchedule(data: Partial<RestartScheduleView>): void {
+  applyScheduleLimits(data)
   if (typeof data.enabled === 'boolean') {
     scheduleEnabled.value = data.enabled
   }
@@ -783,6 +795,7 @@ async function pollSchedule(): Promise<void> {
     const response = await fetch('/api/schedule', { cache: 'no-store' })
     if (response.ok) {
       const data = (await response.json()) as RestartScheduleView
+      applyScheduleLimits(data)
       if (!scheduleDirty.value) {
         scheduleEnabled.value = data.enabled
         scheduleHours.value = data.intervalHours
@@ -800,8 +813,12 @@ async function pollSchedule(): Promise<void> {
 
 async function saveSchedule(): Promise<void> {
   const hours = scheduleHours.value
-  if (!Number.isFinite(hours) || hours < SCHEDULE_MIN_HOURS || hours > SCHEDULE_MAX_HOURS) {
-    ElMessage.warning(`间隔须在 ${SCHEDULE_MIN_HOURS}~${SCHEDULE_MAX_HOURS} 小时之间`)
+  if (
+    !Number.isFinite(hours) ||
+    hours < scheduleMinHours.value ||
+    hours > scheduleMaxHours.value
+  ) {
+    ElMessage.warning(`间隔须在 ${scheduleMinHours.value}~${scheduleMaxHours.value} 小时之间`)
     return
   }
 
@@ -1442,8 +1459,8 @@ async function runLike(): Promise<void> {
           v-model="scheduleHours"
           size="small"
           class="schedule-input"
-          :min="SCHEDULE_MIN_HOURS"
-          :max="SCHEDULE_MAX_HOURS"
+          :min="scheduleMinHours"
+          :max="scheduleMaxHours"
           :step="1"
           :precision="1"
           @change="scheduleDirty = true"

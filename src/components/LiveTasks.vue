@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import helpInfo from '@/library/help-info'
 import { VueDraggable } from 'vue-draggable-plus'
 import { arrayToMap, CANCELLED_NICK_NAME } from '@/library/utils'
+import { SETTING_RANGES, normalizeSetting } from '@/library/utils/constants'
 import type LightTask from '@/modules/dailyTasks/liveTasks/medalTasks/lightTask'
 import type WatchTask from '@/modules/dailyTasks/liveTasks/medalTasks/watchTask'
 
@@ -645,7 +646,10 @@ const handleWatchRestart = async () => {
     return
   }
 
-  const minutes = Math.min(180, Math.max(5, Math.floor(config.medalTasks.watch.restartDelayMinutes) || 5))
+  const minutes = normalizeSetting(
+    config.medalTasks.watch.restartDelayMinutes,
+    SETTING_RANGES.watchRestartDelay,
+  )
   try {
     await ElMessageBox.confirm(
       `会停止当前观看直播任务，${minutes} 分钟后从名单第一个直播间重新开始。`,
@@ -712,11 +716,11 @@ const handleWatchRestart = async () => {
         <el-switch v-model="config.medalTasks.watch.enabled" active-text="观看直播" />
         <el-input-number
           v-model="config.medalTasks.watch.time"
-          :min="5"
-          :max="180"
+          :min="SETTING_RANGES.watchTime.min"
+          :max="SETTING_RANGES.watchTime.max"
           :precision="0"
           :controls="false"
-          :value-on-clear="25"
+          :value-on-clear="SETTING_RANGES.watchTime.default"
           style="width: 80px"
         />
         <el-text>分钟 / 直播间</el-text>
@@ -727,11 +731,11 @@ const handleWatchRestart = async () => {
         />
         <el-input-number
           v-model="config.medalTasks.watch.restartDelayMinutes"
-          :min="5"
-          :max="180"
+          :min="SETTING_RANGES.watchRestartDelay.min"
+          :max="SETTING_RANGES.watchRestartDelay.max"
           :precision="0"
           :controls="false"
-          :value-on-clear="5"
+          :value-on-clear="SETTING_RANGES.watchRestartDelay.default"
           style="width: 70px"
         />
         <el-text>分钟后重启</el-text>

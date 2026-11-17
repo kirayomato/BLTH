@@ -1,4 +1,5 @@
 import type { UiConfig, ModuleConfig, Cache } from '@/types'
+import { SETTING_RANGES } from '@/library/utils/constants'
 
 interface DefaultValues {
   ui: UiConfig
@@ -107,10 +108,10 @@ const defaultValues: DefaultValues = {
           },
           watch: {
             enabled: false,
-            time: 25,
+            time: SETTING_RANGES.watchTime.default,
             // 默认开启：保持「观看时间分配」的行为，老配置补齐该字段后不受影响
             autoAllocateTime: true,
-            restartDelayMinutes: 5,
+            restartDelayMinutes: SETTING_RANGES.watchRestartDelay.default,
             _lastCompleteTime: 0,
           },
           isWhiteList: false,

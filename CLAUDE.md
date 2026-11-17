@@ -26,6 +26,10 @@ npm run preview            # 打开提供编译产物安装链接的本地预览
 `standalone/polyfill.ts` 补齐 `window` / `document` / `navigator` / `cookieStore`。
 因此 `src/` 中任务与接口相关的代码无需为两个运行环境分别维护。
 
+观看时长与重启延迟的默认值和范围统一定义在 `src/library/utils/constants.ts`；配置读入和
+写盘都按它归一化，配置 JSON 手填的越界值不会进入任务运行。只在单个界面出现的数值仍在
+对应组件里维护。
+
 运行前需要准备：
 
 - `cookie.txt`：浏览器访问 bilibili.com 时的 cookie，兼容请求头式、Netscape 式与 JSON 三种写法
@@ -78,7 +82,8 @@ BLTH_PROBE=1 node dist-standalone/blth-standalone.mjs  # 仅检查登录态，�
 定时重启（`GET/POST /api/schedule`）：控制台级的**全局**设置，所有账号共用一份，存在
 `data/console.json`，由控制台自己读写。它不属于任务进程的 `modules` 配置，不能放进
 `data/storage.json`（后者的唯一写入方是任务进程）。字段为 `autoRestart.enabled` 与
-`autoRestart.intervalHours`（1~24 小时，默认 6）。`RestartSchedule` 只在内存里维护下次
+`autoRestart.intervalHours`（0.5~168 小时，默认 6）。GET 同时下发 `minHours`/`maxHours`，
+页面据此限制输入范围，不在前端另写一份。`RestartSchedule` 只在内存里维护下次
 重启时刻：控制台自身重启后重新计时，避免残留的过期时间戳让页面一打开就触发一轮重启；
 保存设置同样重新计时。后台线程每 5 秒检查一次，到点先顺延下次时刻，再对全部账号调用同一个
 `account.restart()`（立即停止并重启，在途任务会被中断），并以 `[Console]` 给每个账号各写一条

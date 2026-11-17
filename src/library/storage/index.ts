@@ -1,7 +1,20 @@
 import { GM_getValue, GM_setValue } from '$'
 import defaultValues from './defaultValues'
 import type { UiConfig, ModuleConfig, Cache, RoomidEntry } from '@/types'
+import { SETTING_RANGES, normalizeSetting } from '@/library/utils/constants'
 import _ from 'lodash'
+
+/** 观看直播数值配置按统一范围归一化，避免手改配置文件后任务按越界值运行 */
+export function normalizeModuleConfig(config: ModuleConfig): ModuleConfig {
+  const watch = config.DailyTasks.LiveTasks.medalTasks.watch
+  watch.time = normalizeSetting(watch.time, SETTING_RANGES.watchTime)
+  watch.restartDelayMinutes = normalizeSetting(
+    watch.restartDelayMinutes,
+    SETTING_RANGES.watchRestartDelay,
+  )
+
+  return config
+}
 
 class Storage {
   /**
@@ -82,7 +95,9 @@ class Storage {
   }
 
   public static getModuleConfig(): ModuleConfig {
-    const moduleConfig = this.mergeConfigs(GM_getValue('modules', {}), defaultValues.modules)
+    const moduleConfig = normalizeModuleConfig(
+      this.mergeConfigs(GM_getValue('modules', {}), defaultValues.modules),
+    )
     const medalTasks = moduleConfig.DailyTasks.LiveTasks.medalTasks
     medalTasks.roomidList = this.normalizeRoomidList(medalTasks.roomidList)
     medalTasks.roomidList2 = this.normalizeRoomidList(medalTasks.roomidList2)
