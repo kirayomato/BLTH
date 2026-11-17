@@ -34,6 +34,8 @@ class MedalModule extends BaseModule {
   private static readonly LIVE_STATUS_SNAPSHOT_FRESHNESS_THRESHOLD = 60_000
   /** 直播状态快照（key：直播间号） */
   private static readonly liveStatusSnapshots = new Map<number, LiveStatusSnapshot>()
+  /** 已提醒过亲密度储蓄未满的主播 UID，避免轮询中重复提醒 */
+  private static readonly freeIntimacyNotifiedUids = new Set<number>()
   /** 静态方法使用的日志器；实例方法使用继承的 this.logger */
   private static readonly logger = new Logger('MedalModule')
 
@@ -364,7 +366,8 @@ class MedalModule extends BaseModule {
         MedalModule.logger.warn(
           `${data.name}(uid: ${targetId}) 已储蓄满${data.free_intimacy}亲密度，无法进行任务`,
         )
-      } else if (data.free_intimacy > 0) {
+      } else if (data.free_intimacy > 0 && !MedalModule.freeIntimacyNotifiedUids.has(targetId)) {
+        MedalModule.freeIntimacyNotifiedUids.add(targetId)
         MedalModule.logger.warn(`${data.name}(uid: ${targetId}) 已储蓄${data.free_intimacy}亲密度`)
       }
       return {
