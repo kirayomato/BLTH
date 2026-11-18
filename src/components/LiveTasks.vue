@@ -229,6 +229,10 @@ const sourceRows = computed<MedalRow[]>(() =>
   isLikeMode.value ? likeCandidates.value : allMedalRows.value,
 )
 
+/** 点赞模式下亲密度储蓄已满的勋章不可勾选；其他模式沿用原有勾选规则 */
+const isMedalRowSelectable = (row: MedalRow): boolean =>
+  !isLikeMode.value || !row.reachFreeIntimacyLimit
+
 /** 把最终顺序回写到对应名单；用户名取自当前行（留空则为空字符串） */
 const writeCheckedRoomids = (roomids: number[]) => {
   if (isLikeMode.value) {
@@ -465,6 +469,7 @@ function handleSelect(selection: MedalRow[]) {
 function handleRowClick(row: MedalRow) {
   // 排序模式下（仅在编辑名单时有意义）不切换选择状态
   if (!medalTableHasSelection.value) return
+  if (!isMedalRowSelectable(row)) return
 
   const roomids = getCheckedRoomids()
   const index = roomids.indexOf(row.roomid)
@@ -532,7 +537,7 @@ const handleManualLike = async () => {
     })
     likeTodayLikes.value = snapshot.todayLikes
     likeDailyLimit.value = snapshot.dailyLimit
-    // 亲密度储蓄已满的勋章默认不勾选：点赞不再涨亲密度，需要时手动勾上
+    // 亲密度储蓄已满的勋章禁止勾选：点赞不再涨亲密度
     likeSelection.value = candidates.filter((row) => !row.reachFreeIntimacyLimit)
     // 默认顺序：已勾选的排在前，同组内按勋章等级降序
     const checkedRoomids = new Set(likeSelection.value.map((row) => row.roomid))
@@ -843,8 +848,8 @@ const handleWatchRestart = async () => {
         class="panel-summary"
       >
         共 {{ likeCandidates.length }} 个直播间可以点赞；今日已点亮勋章点赞 {{ likeTodayLikes }} 次（提示阈值
-        {{ likeDailyLimit }}，未点亮勋章的点赞不计数）。亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。勾选后点击【开始点赞】，关闭窗口视为取消。每天 23:30
-        会自动按此默认勾选规则执行一次点赞。
+        {{ likeDailyLimit }}，未点亮勋章的点赞不计数）。亲密度储蓄已满的勋章标记为【已满】并禁止勾选，不参与点赞。勾选后点击【开始点赞】，关闭窗口视为取消。每天 23:30
+        会自动跳过【已满】勋章执行一次点赞。
       </el-text>
       <el-text v-if="isPriorityMode" type="info" class="panel-summary">
         roomidList2
@@ -900,7 +905,12 @@ const handleWatchRestart = async () => {
           @row-click="handleRowClick"
         >
           <template v-if="medalTableHasSelection">
-            <el-table-column type="selection" align="center" width="60" />
+            <el-table-column
+              type="selection"
+              align="center"
+              width="60"
+              :selectable="isMedalRowSelectable"
+            />
           </template>
           <template v-else>
             <el-table-column type="index" align="center" width="60" />

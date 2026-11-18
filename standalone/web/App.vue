@@ -1312,6 +1312,11 @@ function avatarUrl(row: { avatar: string }): string {
   return `/api/avatar?url=${encodeURIComponent(url)}`
 }
 
+/** 亲密度储蓄已满的勋章不可勾选 */
+function isLikeRowSelectable(row: LikeRoomCandidate): boolean {
+  return !row.reachFreeIntimacyLimit
+}
+
 /**
  * 同步勾选
  *
@@ -1358,6 +1363,7 @@ watch(filteredLikeCandidates, () => nextTick(syncLikeSelection))
 function handleLikeRowClick(row: LikeRoomCandidate, _column: unknown, event: Event): void {
   const target = event.target as HTMLElement | null
   if (target?.closest('.el-checkbox, a, button')) return
+  if (!isLikeRowSelectable(row)) return
 
   // 勾选状态以 likeSelection 为准，同时显式切换表格行，不依赖 select 事件回流
   const selected = likeSelection.value.some((item) => item.roomid === row.roomid)
@@ -1776,7 +1782,7 @@ async function runLike(): Promise<void> {
 
       <p v-if="dailyLimit > 0" class="hint">
         今日已点亮勋章点赞 {{ todayLikes }} 次（提示阈值 {{ dailyLimit }}，未点亮勋章的点赞不计数）。
-        亲密度储蓄已满的勋章标记为【已满】并默认不勾选，需要时手动勾上。
+        亲密度储蓄已满的勋章标记为【已满】并禁止勾选，不参与点赞。
       </p>
 
       <el-table
@@ -1791,7 +1797,12 @@ async function runLike(): Promise<void> {
         @select-all="handleLikeSelect"
         @row-click="handleLikeRowClick"
       >
-        <el-table-column type="selection" align="center" width="60" />
+        <el-table-column
+          type="selection"
+          align="center"
+          width="60"
+          :selectable="isLikeRowSelectable"
+        />
         <el-table-column label="头像" width="90">
           <template #default="scope">
             <div class="avatar-wrap">
