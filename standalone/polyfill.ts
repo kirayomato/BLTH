@@ -21,6 +21,7 @@ installWindow()
 installDocument()
 installNavigator()
 installCookieStore()
+installLocalStorage()
 installConsoleFilter()
 
 function loadCookiesOrExit(): Record<string, string> {
@@ -106,6 +107,40 @@ function installCookieStore(): void {
     configurable: true,
     writable: true,
   })
+}
+
+/**
+ * Node 22 把 localStorage 做成了读取即告警的访问器属性。这里注入 navigator 后，
+ * Vue DevTools 的 isBrowser 判定为真，会走到读取 localStorage 的分支并打印
+ * ExperimentalWarning。给一个内存实现既消除告警，也让那段逻辑拿到确定结果。
+ */
+function installLocalStorage(): void {
+  const store = new Map<string, string>()
+  const storage: Storage = {
+    get length() {
+      return store.size
+    },
+    clear: () => store.clear(),
+    getItem: (key) => store.get(key) ?? null,
+    key: (index) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key) => {
+      store.delete(key)
+    },
+    setItem: (key, value) => {
+      store.set(key, String(value))
+    },
+  }
+
+  // 直接覆盖：Node 22 上该属性已存在（读取时才告警），用 in 判断会误以为装好了
+  try {
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: storage,
+      configurable: true,
+      writable: true,
+    })
+  } catch {
+    console.warn('[BLTH] 无法覆盖 localStorage，可能出现 Node 实验性告警')
+  }
 }
 
 /**
