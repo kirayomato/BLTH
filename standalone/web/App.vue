@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElTable } from 'element-plus'
 import { CANCELLED_NICK_NAME, SETTING_RANGES, normalizeSetting } from '@/library/utils/constants'
+import { VueDraggable } from 'vue-draggable-plus'
 import type {
   LikeCandidateSnapshot,
   LikeRoomCandidate,
@@ -44,6 +45,8 @@ const error = ref('')
 
 interface AccountView {
   name: string
+  uid: string
+  uname: string
   running: boolean
   pid: number | null
   startedAt: number | null
@@ -54,6 +57,15 @@ interface AccountView {
 const accounts = ref<AccountView[]>([])
 const currentAccount = ref('')
 const accountError = ref('')
+
+/** 账号标签的显示名：优先昵称，老账号回退到目录名 */
+function accountLabel(account: AccountView): string {
+  return account.uname || account.name
+}
+
+const currentAccountLabel = computed(() => {
+  return accounts.value.find((item) => item.name === currentAccount.value)?.uname || currentAccount.value
+})
 
 /** 当前账号作用域的接口地址 */
 function accountEndpoint(rest: string): string {
@@ -102,27 +114,37 @@ async function selectAccount(name: string, force = false): Promise<void> {
   await fetchLogs(0)
 }
 
-function onAccountTabChange(name: string | number): void {
-  void selectAccount(String(name))
+/** 标签拖动结束后把顺序写回控制台，重启后仍按此顺序显示 */
+async function saveAccountOrder(): Promise<void> {
+  try {
+    const response = await fetch('/api/account-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order: accounts.value.map((item) => item.name) }),
+    })
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+  } catch (err) {
+    accountError.value = `保存账号顺序失败：${(err as Error).message}`
+  }
 }
 
 /* ---------------- 新增 / 删除账号 ---------------- */
 
 const addAccountVisible = ref(false)
-const addAccountName = ref('')
 const addAccountCookie = ref('')
 const addAccountSaving = ref(false)
 
 function openAddAccount(): void {
-  addAccountName.value = ''
   addAccountCookie.value = ''
   addAccountVisible.value = true
 }
 
 async function createAccount(): Promise<void> {
-  const name = addAccountName.value.trim()
-  if (!name) {
-    ElMessage.warning('请输入账号名')
+  if (!addAccountCookie.value.trim()) {
+    ElMessage.warning('请输入 cookie')
     return
   }
   addAccountSaving.value = true
@@ -130,20 +152,59 @@ async function createAccount(): Promise<void> {
     const response = await fetch('/api/accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, cookie: addAccountCookie.value }),
+      body: JSON.stringify({ cookie: addAccountCookie.value }),
     })
-    const data = (await response.json()) as { error?: string }
+    const data = (await response.json()) as AccountView & { error?: string }
     if (!response.ok) {
       throw new Error(data.error ?? `HTTP ${response.status}`)
     }
     addAccountVisible.value = false
-    ElMessage.success(`已新增账号「${name}」并启动`)
-    await loadAccounts(name)
-    await selectAccount(name, true)
+    ElMessage.success(`已新增账号「${data.uname || data.uid}」并启动`)
+    await loadAccounts(data.name)
+    await selectAccount(data.name, true)
   } catch (err) {
     ElMessage.error(`新增账号失败：${(err as Error).message}`)
   } finally {
     addAccountSaving.value = false
+  }
+}
+
+/* ---------------- 更新 Cookie ---------------- */
+
+const updateCookieVisible = ref(false)
+const updateCookieText = ref('')
+const updateCookieSaving = ref(false)
+
+function openUpdateCookie(): void {
+  updateCookieText.value = ''
+  updateCookieVisible.value = true
+}
+
+async function submitUpdateCookie(): Promise<void> {
+  const name = currentAccount.value
+  if (!name || !updateCookieText.value.trim()) {
+    ElMessage.warning('请输入 cookie')
+    return
+  }
+  updateCookieSaving.value = true
+  try {
+    const response = await fetch(`${accountEndpoint('cookie')}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookie: updateCookieText.value }),
+    })
+    const data = (await response.json()) as AccountView & { error?: string }
+    if (!response.ok) {
+      throw new Error(data.error ?? `HTTP ${response.status}`)
+    }
+    updateCookieVisible.value = false
+    ElMessage.success(`已更新「${data.uname || data.uid}」的 cookie 并重启`)
+    await loadAccounts(name)
+    await selectAccount(name, true)
+  } catch (err) {
+    ElMessage.error(`更新 cookie 失败：${(err as Error).message}`)
+  } finally {
+    updateCookieSaving.value = false
   }
 }
 
@@ -1408,16 +1469,33 @@ async function runLike(): Promise<void> {
     <el-alert v-if="accountError" :title="accountError" type="error" :closable="false" show-icon />
 
     <div class="account-bar">
-      <el-tabs v-model="currentAccount" @tab-change="onAccountTabChange" class="account-tabs">
-        <el-tab-pane
+      <VueDraggable
+        v-model="accounts"
+        class="account-tabs"
+        :animation="150"
+        handle=".account-tab-label"
+        @end="saveAccountOrder"
+      >
+        <div
           v-for="account in accounts"
           :key="account.name"
-          :label="account.name"
-          :name="account.name"
-        />
-      </el-tabs>
+          :class="['account-tab-item', { active: account.name === currentAccount }]"
+          @click="selectAccount(account.name)"
+        >
+          <span class="account-tab-label">{{ accountLabel(account) }}</span>
+        </div>
+      </VueDraggable>
       <div class="account-actions">
         <el-button size="small" @click="openAddAccount">新增账号</el-button>
+        <el-button
+          size="small"
+          type="warning"
+          plain
+          :disabled="!currentAccount"
+          @click="openUpdateCookie"
+        >
+          更新 Cookie
+        </el-button>
         <el-button
           size="small"
           type="danger"
@@ -1990,31 +2068,57 @@ async function runLike(): Promise<void> {
       </div>
     </el-card>
 
-    <p class="footer">开关变更会立即写入配置；重新打开的任务会马上运行一次，今天已完成的任务只会重新排期，不会重复执行。配置由任务进程落盘，重启后会重新读取。每个账号有独立的 cookie 与数据目录（data/accounts/&lt;账号名&gt;/），可单独重启、互不影响。</p>
+    <p class="footer">开关变更会立即写入配置；重新打开的任务会马上运行一次，今天已完成的任务只会重新排期，不会重复执行。配置由任务进程落盘，重启后会重新读取。每个账号按 UID 建立独立的 cookie 与数据目录（data/accounts/&lt;UID&gt;/），可单独重启、互不影响；拖动顶部标签可调整顺序。</p>
 
     <el-dialog v-model="addAccountVisible" title="新增账号" width="480px" :lock-scroll="false">
       <p class="hint">
-        账号数据存放在 data/accounts/&lt;账号名&gt;/（含 cookie.txt 与 storage.json）。cookie
-        留空时任务进程会提示未登录，可稍后把 cookie 粘贴到该目录的 cookie.txt 中再重启。
+        粘贴该账号访问 bilibili.com 时的 cookie，控制台会请求 B 站接口识别 UID 与昵称，
+        并以 UID 作为账号目录名（data/accounts/&lt;UID&gt;/）。
       </p>
       <el-form label-width="70px" style="margin-top: 12px">
-        <el-form-item label="账号名">
-          <el-input v-model="addAccountName" placeholder="如：小号A" clearable />
-        </el-form-item>
         <el-form-item label="Cookie">
           <el-input
             v-model="addAccountCookie"
             type="textarea"
             :rows="6"
             spellcheck="false"
-            placeholder="可选：粘贴该账号的 cookie 文本；留空则需自行写入 cookie 文件"
+            placeholder="粘贴该账号的 cookie 文本（请求头式 / Netscape 式 / JSON 均可）"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="addAccountVisible = false">取消</el-button>
         <el-button type="primary" :loading="addAccountSaving" @click="createAccount">
-          新增并启动
+          识别并新增
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="updateCookieVisible"
+      title="更新 Cookie"
+      width="480px"
+      :lock-scroll="false"
+    >
+      <p class="hint">
+        为账号「{{ currentAccountLabel }}」更新 cookie。保存后会自动重启该账号的任务进程，
+        让新 cookie 生效。新 cookie 必须属于同一个账号（相同 UID）。
+      </p>
+      <el-form label-width="70px" style="margin-top: 12px">
+        <el-form-item label="Cookie">
+          <el-input
+            v-model="updateCookieText"
+            type="textarea"
+            :rows="6"
+            spellcheck="false"
+            placeholder="粘贴该账号最新的 cookie 文本"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="updateCookieVisible = false">取消</el-button>
+        <el-button type="primary" :loading="updateCookieSaving" @click="submitUpdateCookie">
+          更新并重启
         </el-button>
       </template>
     </el-dialog>
@@ -2037,12 +2141,50 @@ async function runLike(): Promise<void> {
 }
 
 .account-tabs {
+  display: flex;
   flex: 1;
+  gap: 6px;
+  align-items: center;
   min-width: 0;
+  overflow-x: auto;
+  margin-bottom: 8px;
+  padding-bottom: 2px;
 }
 
-.account-tabs :deep(.el-tabs__header) {
-  margin-bottom: 8px;
+.account-tab-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 6px 12px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 4px;
+  transition: background-color 0.15s, color 0.15s;
+  user-select: none;
+}
+
+.account-tab-item:hover {
+  background: var(--el-fill-color);
+}
+
+.account-tab-item.active {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-5);
+}
+
+.account-tab-label {
+  cursor: grab;
+}
+
+.account-tab-label:active {
+  cursor: grabbing;
+}
+
+.sortable-ghost {
+  opacity: 0.4;
 }
 
 .account-actions {

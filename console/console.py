@@ -45,8 +45,14 @@ MIN_KEEP_SECONDS = 3600
 HARD_MAX_RECORDS = 50000
 MAX_BODY = 10 * 1024 * 1024
 
-# 多账号：每个账号是 data/accounts/<别名>/ 下的一个子目录，含 cookie.txt 与 storage.json
+# 多账号：每个账号是 data/accounts/<UID>/ 下的一个子目录，含 cookie.txt、storage.json 与 meta.json
 ACCOUNTS_ROOT = ROOT / "data" / "accounts"
+# 账号标签顺序（UID 列表），由控制台自己落盘，与任务进程的 storage.json 分开
+ACCOUNT_ORDER_FILE = ROOT / "data" / "account-order.json"
+# 账号身份元数据文件（uid、uname），与 cookie.txt 同目录
+ACCOUNT_META_FILE = "meta.json"
+# 用 cookie 识别账号 UID 与昵称的 B 站接口
+NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 # 账号作用域接口的前缀，其后依次是账号名与子路径
 ACCOUNT_PREFIX = "/api/accounts/"
 # 旧版单账号数据在根目录，首启时复制成默认账号（原文件保留）
@@ -185,6 +191,127 @@ def fetch_avatar(url: str) -> tuple[bytes, str]:
     if len(data) > AVATAR_MAX_BYTES:
         raise ValueError("图片超过大小上限")
     return data, content_type
+
+
+def parse_cookie_text(text: str) -> dict[str, str]:
+    """把 cookie 文本解析成字典，兼容请求头式、Netscape 式与 JSON 三种写法。
+
+    与 standalone/cookie.ts 的 parseCookieText 保持一致，让控制台能在启动任务进程前
+    识别账号身份。
+    """
+    result: dict[str, str] = {}
+    content = text.strip()
+    if not content:
+        return result
+
+    if content.startswith(("{", "[")):
+        from_json = parse_json_cookies(content)
+        if from_json is not None:
+            return from_json
+
+    for raw_line in re.split(r"\r?\n", content):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # Netscape 式：制表符分隔，name / value 位于最后两列
+        cells = raw_line.split("\t")
+        if len(cells) >= 7:
+            name = cells[5].strip()
+            if name:
+                result[name] = cells[6].strip()
+            continue
+
+        # 请求头式：按分号分段，每段形如 name=value
+        for pair in line.split(";"):
+            separator = pair.find("=")
+            if separator <= 0:
+                continue
+            name = pair[:separator].strip()
+            if name:
+                result[name] = pair[separator + 1 :].strip()
+
+    return result
+
+
+def parse_json_cookies(content: str) -> dict[str, str] | None:
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return None
+
+    result: dict[str, str] = {}
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                value = item.get("value")
+                if value is not None:
+                    result[item["name"]] = str(value)
+    elif isinstance(parsed, dict):
+        for name, value in parsed.items():
+            if value is not None:
+                result[name] = str(value)
+    else:
+        return None
+    return result
+
+
+def build_cookie_header(cookies: dict[str, str]) -> str:
+    return "; ".join(f"{name}={value}" for name, value in cookies.items())
+
+
+def identify_account(cookie_text: str) -> dict[str, str]:
+    """用 cookie 请求 B 站 nav 接口，返回 {uid, uname}。cookie 无效时抛 ValueError。"""
+    cookies = parse_cookie_text(cookie_text)
+    header = build_cookie_header(cookies)
+    if not header:
+        raise ValueError("cookie 内容为空，无法识别账号")
+
+    request = Request(
+        NAV_URL,
+        headers={
+            "Cookie": header,
+            "User-Agent": AVATAR_UA,
+            "Referer": AVATAR_REFERER,
+        },
+    )
+    try:
+        with urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        raise ValueError(f"请求 B 站接口失败：{error}") from error
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not data.get("isLogin"):
+        raise ValueError("cookie 未登录或已失效，请检查 SESSDATA 等字段")
+    uid = data.get("mid")
+    uname = data.get("uname")
+    if not isinstance(uid, int) or not isinstance(uname, str) or not uname:
+        raise ValueError("B 站接口未返回有效的 UID 或昵称")
+    return {"uid": str(uid), "uname": uname}
+
+
+def read_account_meta(directory: Path) -> dict[str, str]:
+    """读取账号的 uid/uname；缺失或损坏时返回空字典。"""
+    path = directory / ACCOUNT_META_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {key: str(data[key]) for key in ("uid", "uname") if data.get(key)}
+
+
+def write_account_meta(directory: Path, uid: str, uname: str) -> None:
+    """原子写入账号身份元数据。"""
+    path = directory / ACCOUNT_META_FILE
+    temporary = Path(str(path) + ".tmp")
+    payload = {"uid": uid, "uname": uname}
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary, path)
 
 
 # 终端输出锁：stdout/stderr 两个读取线程与请求线程都会打印，整行加锁避免交错
@@ -642,6 +769,10 @@ class Account:
     def __init__(self, name: str, directory: Path, command: list[str], cwd: Path) -> None:
         self.name = name
         self.directory = directory
+        # 标签显示名与 UID 来自 meta.json；老账号没有该文件时回退到目录名
+        meta = read_account_meta(directory)
+        self.uid = meta.get("uid", name)
+        self.uname = meta.get("uname", name)
         self.logs = LogBuffer()
         self.control = ControlChannel()
         self.supervisor = Supervisor(command, cwd, self.logs, self.control)
@@ -657,9 +788,20 @@ class Account:
     def restart(self) -> bool:
         return self.supervisor.try_restart()
 
+    def update_cookie(self, cookie: str, uid: str, uname: str) -> None:
+        """写入新 cookie 与身份信息；调用方负责在写入后重启进程。"""
+        cookie_path = self.directory / "cookie.txt"
+        temporary = Path(str(cookie_path) + ".tmp")
+        temporary.write_text(cookie, encoding="utf-8")
+        os.replace(temporary, cookie_path)
+        write_account_meta(self.directory, uid, uname)
+        self.uid, self.uname = uid, uname
+
     def status(self) -> dict:
         status = self.supervisor.status()
         status["name"] = self.name
+        status["uid"] = self.uid
+        status["uname"] = self.uname
         return status
 
 
@@ -669,6 +811,48 @@ class AccountManager:
     def __init__(self, node: str, script: Path) -> None:
         self.command = [node, str(script)]
         self.accounts: OrderedDict[str, Account] = OrderedDict()
+        self.order: list[str] = []
+
+    def load_order(self) -> None:
+        """读取账号顺序；文件缺失或损坏时保持空列表（调用方随后按目录名排序）。"""
+        try:
+            data = json.loads(ACCOUNT_ORDER_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return
+        if isinstance(data, dict) and isinstance(data.get("order"), list):
+            self.order = [name for name in data["order"] if isinstance(name, str)]
+
+    def save_order(self) -> None:
+        """按当前 accounts 顺序原子落盘。"""
+        self.order = list(self.accounts)
+        ACCOUNT_ORDER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(str(ACCOUNT_ORDER_FILE) + ".tmp")
+        temporary.write_text(
+            json.dumps({"order": self.order}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, ACCOUNT_ORDER_FILE)
+
+    def reorder(self, names: list[str]) -> bool:
+        """按给定名字列表重排账号；列表须与现有账号同名集合，缺失的追加到末尾。"""
+        known = list(self.accounts)
+        if len(names) != len(known) or set(names) != set(known):
+            return False
+        self.accounts = OrderedDict((name, self.accounts[name]) for name in names)
+        self.save_order()
+        return True
+
+    def apply_order(self) -> None:
+        """扫描后套用保存的顺序：已在顺序里的按序，新增的追加到末尾。"""
+        ordered: OrderedDict[str, Account] = OrderedDict()
+        for name in self.order:
+            account = self.accounts.get(name)
+            if account is not None:
+                ordered[name] = account
+        for name, account in self.accounts.items():
+            if name not in ordered:
+                ordered[name] = account
+        self.accounts = ordered
 
     def ensure_default(self) -> None:
         """首次启动时把旧的根目录单账号复制成默认账号，原文件保留不删。
@@ -710,18 +894,23 @@ class AccountManager:
     def get(self, name: str) -> Account | None:
         return self.accounts.get(name)
 
-    def create(self, name: str, cookie: str = "") -> Account | None:
-        """新建账号目录并登记；进程由调用方决定何时启动。"""
-        if not valid_account_name(name) or name in self.accounts:
+    def create(self, uid: str, uname: str, cookie: str) -> Account | None:
+        """用 UID 新建账号目录并登记；进程由调用方决定何时启动。"""
+        if not valid_account_name(uid) or uid in self.accounts:
             return None
-        directory = ACCOUNTS_ROOT / name
+        directory = ACCOUNTS_ROOT / uid
         if directory.exists():
             return None
         directory.mkdir(parents=True)
-        (directory / "cookie.txt").write_text(cookie or "", encoding="utf-8")
-        account = Account(name, directory, self.command, ROOT)
-        self.accounts[name] = account
+        (directory / "cookie.txt").write_text(cookie, encoding="utf-8")
+        write_account_meta(directory, uid, uname)
+        account = Account(uid, directory, self.command, ROOT)
+        self.accounts[uid] = account
         return account
+
+    def update_cookie(self, account: Account, cookie: str, uid: str, uname: str) -> None:
+        """更新账号 cookie 与身份信息；调用方随后重启进程让新 cookie 生效。"""
+        account.update_cookie(cookie, uid, uname)
 
     def remove(self, name: str) -> bool:
         """停掉账号进程并从清单移除；账号目录保留，便于找回 cookie 等数据。"""
@@ -1117,17 +1306,46 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "请求体必须是 JSON 对象"})
                 return
 
-            name = payload.get("name")
-            if not isinstance(name, str) or not name.strip():
-                self._send_json(400, {"error": "缺少账号名"})
-                return
             cookie = payload.get("cookie")
-            account = self.accounts.create(name.strip(), cookie if isinstance(cookie, str) else "")
-            if account is None:
-                self._send_json(400, {"error": "账号名非法或已存在，或目录已被占用"})
+            if not isinstance(cookie, str) or not cookie.strip():
+                self._send_json(400, {"error": "缺少 cookie"})
                 return
+            try:
+                identity = identify_account(cookie)
+            except ValueError as error:
+                self._send_json(400, {"error": str(error)})
+                return
+            uid, uname = identity["uid"], identity["uname"]
+            account = self.accounts.create(uid, uname, cookie)
+            if account is None:
+                self._send_json(409, {"error": f"账号 UID {uid} 已存在或目录已被占用"})
+                return
+            self.accounts.save_order()
             account.start()
             self._send_json(201, account.status())
+            return
+
+        if path == "/api/account-order":
+            body = self._read_body()
+            if body is None:
+                self._send_json(400, {"error": "请求体长度不合法"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (ValueError, UnicodeDecodeError):
+                self._send_json(400, {"error": "请求体不是合法的 JSON"})
+                return
+            if not isinstance(payload, dict):
+                self._send_json(400, {"error": "请求体必须是 JSON 对象"})
+                return
+            order = payload.get("order")
+            if not isinstance(order, list):
+                self._send_json(400, {"error": "order 必须是数组"})
+                return
+            if not self.accounts.reorder(order):
+                self._send_json(400, {"error": "order 必须与现有账号集合一致"})
+                return
+            self._send_json(200, {"order": self.accounts.names()})
             return
 
         if path.startswith(ACCOUNT_PREFIX):
@@ -1142,6 +1360,47 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(202, {"accepted": True})
                 else:
                     self._send_json(409, {"error": "正在重新启动"})
+                return
+
+            if rest == "cookie":
+                body = self._read_body()
+                if body is None:
+                    self._send_json(400, {"error": "请求体长度不合法"})
+                    return
+                try:
+                    payload = json.loads(body.decode("utf-8") or "{}")
+                except (ValueError, UnicodeDecodeError):
+                    self._send_json(400, {"error": "请求体不是合法的 JSON"})
+                    return
+                if not isinstance(payload, dict):
+                    self._send_json(400, {"error": "请求体必须是 JSON 对象"})
+                    return
+                cookie = payload.get("cookie")
+                if not isinstance(cookie, str) or not cookie.strip():
+                    self._send_json(400, {"error": "缺少 cookie"})
+                    return
+                try:
+                    identity = identify_account(cookie)
+                except ValueError as error:
+                    self._send_json(400, {"error": str(error)})
+                    return
+                # 老账号（无 meta）用目录名作 uid，可能是中文别名，不做 UID 一致性校验
+                if account.uid.isdigit() and identity["uid"] != account.uid:
+                    self._send_json(
+                        409,
+                        {
+                            "error": (
+                                f"该 cookie 属于另一个账号（UID {identity['uid']}），"
+                                f"与当前账号（UID {account.uid}）不符"
+                            )
+                        },
+                    )
+                    return
+                self.accounts.update_cookie(account, cookie, identity["uid"], identity["uname"])
+                if not account.restart():
+                    self._send_json(409, {"error": "cookie 已更新，但账号正在重新启动，请稍后手动重启"})
+                    return
+                self._send_json(200, account.status())
                 return
 
             if rest in PROXY_POST:
@@ -1165,6 +1424,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self.accounts.remove(name):
                 self._send_json(404, {"error": f"账号不存在：{name}"})
                 return
+            self.accounts.save_order()
             self._send_json(200, {"removed": name})
             return
 
@@ -1212,6 +1472,8 @@ def main() -> int:
     accounts = AccountManager(args.node, script)
     accounts.ensure_default()
     accounts.scan()
+    accounts.load_order()
+    accounts.apply_order()
     schedule = RestartSchedule(SCHEDULE_FILE)
     Handler.accounts = accounts
     Handler.web_page = web_page

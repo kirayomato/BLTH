@@ -59,7 +59,8 @@ async function loadAccounts(prefer) {
     accSel.innerHTML = '';
     for (const a of list) {
       const opt = document.createElement('option');
-      opt.value = a.name; opt.textContent = a.name + (a.running ? '（运行中）' : '（已停止）');
+      const label = a.uname || a.name;
+      opt.value = a.name; opt.textContent = label + (a.running ? '（运行中）' : '（已停止）');
       accSel.appendChild(opt);
     }
     if (list.some((a) => a.name === prev)) accSel.value = prev;
